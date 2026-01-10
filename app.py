@@ -1,4 +1,10 @@
-import os, json, time, threading, queue, traceback, importlib.util
+import os
+import json
+import time
+import threading
+import queue
+import traceback
+import importlib.util
 from flask import Flask, request, jsonify
 import psycopg2, psycopg2.extras
 import websocket, requests
@@ -32,8 +38,8 @@ ENGINE = {
 
 ROOM_LOCKS = {}
 USER_LOCKS = {}
-LOCKS_LOCK = threading.Lock()  # safe lock creation
-ROOM_STATES = {}   # room_id -> state dict
+LOCKS_LOCK = threading.Lock()
+ROOM_STATES = {}  # room_id -> state dict
 
 # =========================================================
 # LOGGING
@@ -62,11 +68,12 @@ def user_lock(user):
         return USER_LOCKS[user]
 
 # =========================================================
-# DATABASE (ENGINE OWNED)
+# DATABASE
 # =========================================================
 class Database:
     def __init__(self):
         self.lock = threading.Lock()
+        self.conn = None
         self._connect()
 
     def _connect(self):
@@ -75,7 +82,7 @@ class Database:
                 self.conn = psycopg2.connect(NEON_DATABASE_URL)
                 log("DB connected")
             else:
-                log("Warning: NEON_DATABASE_URL not set")
+                log("Warning: NEON_DATABASE_URL not set, DB disabled")
                 self.conn = None
         except Exception as e:
             log(f"DB connection failed: {e}")
@@ -87,8 +94,7 @@ class Database:
                 if self.conn is None:
                     self._connect()
                 if self.conn is None:
-                    # Database optional for simple bots
-                    return None 
+                    return None
                 try:
                     with self.conn:
                         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -105,7 +111,7 @@ class Database:
 DB = Database()
 
 # =========================================================
-# SAFE APIs (PLUGIN ONLY SEES THIS)
+# SAFE APIs
 # =========================================================
 class DB_API:
     def add_score(self, user, game, points):
@@ -172,7 +178,7 @@ class Media_API:
 # GAME MANAGER
 # =========================================================
 class GameManager:
-    TIMEOUT = 120  # seconds
+    TIMEOUT = 120
 
     def ensure_room(self, room):
         ROOM_STATES.setdefault(room, {
@@ -200,7 +206,7 @@ class GameManager:
             if notify and rs.get("players"):
                 game_name = rs.get("active_game", "Unknown Game")
                 player_list = ", ".join(rs["players"])
-                text = f"Game '{game_name}' ended due to inactivity. Thanks for playing: {player_list}!"
+                text = f"Game '{game_name}' ended due to inactivity. Thanks: {player_list}!"
                 send_raw({
                     "handler": "chatroommessage",
                     "type": "text",
@@ -348,7 +354,7 @@ def execute_plugin(plugin, user, room, msg):
 # =========================================================
 def load(folder, target):
     if not os.path.isdir(folder):
-        return
+        os.makedirs(folder)
     for f in os.listdir(folder):
         if f.endswith(".py"):
             p = os.path.join(folder, f)
@@ -364,12 +370,11 @@ def load(folder, target):
                 log(f"Failed to load {f}: {e}")
 
 # =========================================================
-# UI API
+# FLASK ROUTES
 # =========================================================
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
-    # Validate payload
     if not data or "botId" not in data or "password" not in data:
          return jsonify({"ok": False, "error": "Missing botId or password"}), 400
 
@@ -411,7 +416,6 @@ def status():
 @app.route("/get_logs")
 def get_logs():
     logs_list = []
-    # Fetch all current logs from queue
     while not ENGINE["logs"].empty():
         try:
             logs_list.append(ENGINE["logs"].get_nowait())
@@ -429,5 +433,8 @@ def health():
 load("plugins", ENGINE["plugins"])
 load("games", ENGINE["games"])
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+# =========================================================
+# DEPLOYMENT READY
+# =========================================================
+# Expose `app` for WSGI (Gunicorn, Uvicorn, etc.)
+# Example deployment: `gunicorn -w 4 -b 0.0.0.0:$PORT main:app`
