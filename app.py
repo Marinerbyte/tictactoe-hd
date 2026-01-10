@@ -71,8 +71,12 @@ class Database:
 
     def _connect(self):
         try:
-            self.conn = psycopg2.connect(NEON_DATABASE_URL)
-            log("DB connected")
+            if NEON_DATABASE_URL:
+                self.conn = psycopg2.connect(NEON_DATABASE_URL)
+                log("DB connected")
+            else:
+                log("Warning: NEON_DATABASE_URL not set")
+                self.conn = None
         except Exception as e:
             log(f"DB connection failed: {e}")
             self.conn = None
@@ -83,9 +87,8 @@ class Database:
                 if self.conn is None:
                     self._connect()
                 if self.conn is None:
-                    log("DB not connected")
-                    time.sleep(delay)
-                    continue
+                    # Database optional for simple bots
+                    return None 
                 try:
                     with self.conn:
                         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -256,9 +259,16 @@ def on_message(ws, msg):
             user = data.get("from")
             text = data.get("text", "")
 
+            # Plugin execution
             for trigger, plugin in ENGINE["plugins"].items():
                 if text.startswith(trigger):
                     execute_plugin(plugin, user, room, text)
+            
+            # Game execution
+            for trigger, game_func in ENGINE["games"].items():
+                if text.startswith(trigger):
+                    execute_plugin(game_func, user, room, text)
+
     except Exception:
         log(traceback.format_exc())
 
@@ -359,10 +369,19 @@ def load(folder, target):
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
+    # Validate payload
+    if not data or "botId" not in data or "password" not in data:
+         return jsonify({"ok": False, "error": "Missing botId or password"}), 400
+
     r = requests.post("https://api.howdies.app/api/login", json=data)
-    if r.status_code != 200 or "token" not in r.json():
-        return jsonify({"ok": False, "error": "Login failed"}), 400
-    ENGINE["token"] = r.json()["token"]
+    if r.status_code != 200:
+        return jsonify({"ok": False, "error": f"API Error: {r.text}"}), 400
+        
+    resp_data = r.json()
+    if "token" not in resp_data:
+        return jsonify({"ok": False, "error": "Login failed (No token)"}), 400
+
+    ENGINE["token"] = resp_data["token"]
     start_ws()
     return jsonify({"ok": True})
 
@@ -385,8 +404,20 @@ def status():
     return jsonify({
         "connected": ENGINE["connected"],
         "rooms": rooms,
-        "plugins": list(ENGINE["plugins"].keys())
+        "plugins": list(ENGINE["plugins"].keys()),
+        "games": list(ENGINE["games"].keys())
     })
+
+@app.route("/get_logs")
+def get_logs():
+    logs_list = []
+    # Fetch all current logs from queue
+    while not ENGINE["logs"].empty():
+        try:
+            logs_list.append(ENGINE["logs"].get_nowait())
+        except queue.Empty:
+            break
+    return jsonify({"logs": logs_list})
 
 @app.route("/")
 def health():
