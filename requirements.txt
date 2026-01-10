@@ -1,9 +1,7 @@
 gunicorn
 Flask
 requests
-websocket-client
+websocket-client  
 Pillow
 psycopg2-binary
 python-dotenv
-fuzzywuzzy==0.18.0
-python-Levenshtein==0.23.0
