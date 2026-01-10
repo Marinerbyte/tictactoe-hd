@@ -96,7 +96,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # API Configuration
-API_URL = "http://localhost:5000"
+API_URL = "https://tictactoe-hd.onrender.com"
 
 # =========================================================
 # 2. STATE & API HELPERS
