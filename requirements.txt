@@ -1,4 +1,5 @@
 gunicorn
+websocket
 Flask
 eventlet
 requests
