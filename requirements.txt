@@ -1,9 +1,6 @@
-gunicorn
-websocket
 Flask
-eventlet
 requests
-python-dotenv==1.0.1
-redis==5.0.1
+websocket-client
 psycopg2-binary
 Pillow
+gunicorn
