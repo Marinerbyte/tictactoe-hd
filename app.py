@@ -111,6 +111,42 @@ class Database:
 DB = Database()
 
 # =========================================================
+# AUTO-INIT TABLES
+# =========================================================
+def init_tables():
+    tables = {
+        "scores": """
+            CREATE TABLE IF NOT EXISTS scores (
+                user_id TEXT,
+                game TEXT,
+                score BIGINT,
+                PRIMARY KEY(user_id, game)
+            );
+        """,
+        "wallet": """
+            CREATE TABLE IF NOT EXISTS wallet (
+                user_id TEXT PRIMARY KEY,
+                balance BIGINT
+            );
+        """,
+        # future plugin/game tables can be added here
+        # Example:
+        # "tictactoe_state": """
+        #     CREATE TABLE IF NOT EXISTS tictactoe_state (
+        #         room_id TEXT PRIMARY KEY,
+        #         board TEXT,
+        #         players TEXT[]
+        #     );
+        # """
+    }
+    for sql in tables.values():
+        DB.atomic(lambda cur: cur.execute(sql))
+    log("DB tables checked/created")
+
+# Call at boot
+init_tables()
+
+# =========================================================
 # SAFE APIs
 # =========================================================
 class DB_API:
