@@ -114,6 +114,7 @@ DB = Database()
 # AUTO-INIT TABLES
 # =========================================================
 def init_tables():
+    """Create default tables and allow future plugin/game tables to register themselves."""
     tables = {
         "scores": """
             CREATE TABLE IF NOT EXISTS scores (
@@ -128,23 +129,19 @@ def init_tables():
                 user_id TEXT PRIMARY KEY,
                 balance BIGINT
             );
-        """,
-        # future plugin/game tables can be added here
-        # Example:
-        # "tictactoe_state": """
-        #     CREATE TABLE IF NOT EXISTS tictactoe_state (
-        #         room_id TEXT PRIMARY KEY,
-        #         board TEXT,
-        #         players TEXT[]
-        #     );
-        # """
+        """
     }
-    for sql in tables.values():
+    for table_name, sql in tables.items():
         DB.atomic(lambda cur: cur.execute(sql))
-    log("DB tables checked/created")
+    log("DB default tables checked/created")
 
-# Call at boot
-init_tables()
+    # Future: each plugin/game can register a 'TABLES' dict like { "table_name": "CREATE TABLE..." }
+    for collection in [ENGINE["plugins"], ENGINE["games"]]:
+        for mod in collection.values():
+            if hasattr(mod, "TABLES"):
+                for tname, tsql in mod.TABLES.items():
+                    DB.atomic(lambda cur, sql=tsql: cur.execute(sql))
+                    log(f"Table {tname} checked/created from plugin/game")
 
 # =========================================================
 # SAFE APIs
@@ -468,6 +465,7 @@ def health():
 # =========================================================
 load("plugins", ENGINE["plugins"])
 load("games", ENGINE["games"])
+init_tables()  # tables create/check at boot
 
 # =========================================================
 # DEPLOYMENT READY
