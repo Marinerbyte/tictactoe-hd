@@ -1,6 +1,8 @@
-Flask
-requests
-websocket-client
-psycopg2-binary
-Pillow
+flask
 gunicorn
+psycopg2-binary
+websocket-client
+requests
+Pillow
+streamlit
+pandas
