@@ -1,313 +1,270 @@
 import streamlit as st
 import requests
-import pandas as pd
 import time
+import pandas as pd
 from datetime import datetime
 
 # =========================================================
-# 1. PAGE CONFIG & CSS (THE VISUAL MAGIC)
+# 1. PAGE SETUP & "MAST" STYLING
 # =========================================================
 st.set_page_config(
-    page_title="Howdies Command Center",
+    page_title="Howdies Bot Commander",
     page_icon="🕹️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # Mobile ke liye best
 )
 
-# --- Custom HTML/CSS Styles ---
+# Render URL (Yahan apna URL dalein)
+DEFAULT_URL = "https://tictactoe-hd.onrender.com" 
+
+# --- Custom CSS for Cyberpunk Look ---
 st.markdown("""
 <style>
-    /* GLOBAL THEME */
-    .stApp {
-        background-color: #0e1117;
+    /* Global Dark Theme */
+    .stApp { background-color: #050505; color: #e0e0e0; }
+    
+    /* Input Fields */
+    div[data-baseweb="input"] {
+        background-color: #111; 
+        border: 1px solid #333; 
+        color: #00ffcc; 
+        border-radius: 8px;
     }
     
-    /* DASHBOARD CARDS */
-    .dashboard-card {
-        background: rgba(38, 39, 48, 0.7);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    /* Login Box Container */
+    .login-container {
+        background: rgba(20, 20, 20, 0.8);
+        padding: 25px;
         border-radius: 12px;
-        padding: 20px;
+        border: 1px solid #333;
+        box-shadow: 0 0 20px rgba(0, 255, 204, 0.1);
+        margin-bottom: 20px;
+    }
+    
+    /* Dashboard Cards */
+    .metric-card {
+        background: linear-gradient(145deg, #0f0f0f, #161616);
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #333;
         text-align: center;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+        margin-bottom: 10px;
         transition: transform 0.2s;
     }
-    .dashboard-card:hover {
-        transform: translateY(-2px);
-        border-color: #ff4b4b;
-    }
-    .metric-label {
-        font-size: 0.9rem;
-        color: #a0a0a0;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 5px;
-    }
-    .metric-value {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #ffffff;
-    }
+    .metric-card:hover { transform: translateY(-2px); border-left-color: #00ffcc; }
+    .val { font-size: 1.8rem; font-weight: 700; color: #fff; }
+    .lbl { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
     
-    /* STATUS DOTS */
-    .status-dot {
-        height: 12px;
-        width: 12px;
-        border-radius: 50%;
-        display: inline-block;
-        margin-right: 8px;
-    }
-    .online { background-color: #00ff41; box-shadow: 0 0 10px #00ff41; }
-    .offline { background-color: #ff2b2b; box-shadow: 0 0 10px #ff2b2b; }
-
-    /* LOGS TERMINAL */
-    .terminal-window {
-        background-color: #0d1117;
-        border: 1px solid #30363d;
+    /* Terminal Window */
+    .terminal-box {
+        background-color: #0a0a0a;
+        border: 1px solid #333;
         border-radius: 8px;
         padding: 15px;
-        font-family: 'Courier New', monospace;
         height: 400px;
         overflow-y: auto;
-        color: #c9d1d9;
+        font-family: 'Courier New', monospace;
         font-size: 0.85rem;
+        box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
     }
-    .log-line {
-        border-bottom: 1px solid #21262d;
-        padding: 4px 0;
-        display: flex;
+    .log-row { display: flex; border-bottom: 1px solid #1a1a1a; padding: 4px 0; }
+    .log-ts { color: #555; min-width: 80px; font-size: 0.75rem; }
+    .log-txt { color: #00ffcc; word-break: break-all; }
+    .log-err { color: #ff3333; }
+    
+    /* Custom Buttons */
+    div.stButton > button {
+        background-color: #222; 
+        color: white; 
+        border: 1px solid #444; 
+        width: 100%; 
+        border-radius: 8px;
+        padding: 10px;
+        font-weight: bold;
+        transition: all 0.3s;
     }
-    .log-time { color: #8b949e; margin-right: 10px; min-width: 80px; }
-    .log-msg { color: #58a6ff; }
-    .log-err { color: #ff7b72; }
-
-    /* BADGES */
-    .plugin-badge {
-        background-color: #238636;
-        color: white;
-        padding: 4px 10px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        margin: 2px;
-        display: inline-block;
+    div.stButton > button:hover {
+        background-color: #00ffcc;
+        color: black;
+        border-color: #00ffcc;
+        box-shadow: 0 0 15px #00ffcc;
     }
+    div.stButton > button:active { transform: scale(0.98); }
 </style>
 """, unsafe_allow_html=True)
 
-# API Configuration
-API_URL = "https://tictactoe-hd.onrender.com"
-
 # =========================================================
-# 2. STATE & API HELPERS
+# 2. API HELPERS
 # =========================================================
-if "token" not in st.session_state:
-    st.session_state.token = None
-if "log_history" not in st.session_state:
-    st.session_state.log_history = []
+if "api_url" not in st.session_state:
+    st.session_state.api_url = DEFAULT_URL
 
-def api_post(endpoint, data):
+def get_base_url():
+    return st.session_state.api_url.rstrip("/")
+
+def api_post(endpoint, payload):
     try:
-        r = requests.post(f"{API_URL}/{endpoint}", json=data, timeout=3)
-        return r.json()
-    except:
-        return {"ok": False, "error": "Connection Failed"}
+        r = requests.post(f"{get_base_url()}/{endpoint}", json=payload, timeout=10)
+        return r.json(), r.status_code
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 def api_get(endpoint):
     try:
-        r = requests.get(f"{API_URL}/{endpoint}", timeout=2)
+        r = requests.get(f"{get_base_url()}/{endpoint}", timeout=5)
         return r.json() if r.status_code == 200 else None
     except:
         return None
 
 # =========================================================
-# 3. SIDEBAR (CONTROLS)
+# 3. SIDEBAR (CONFIG)
 # =========================================================
 with st.sidebar:
-    st.markdown("## 🤖 **CONTROL PANEL**")
+    st.title("⚙️ SETTINGS")
+    st.caption("Engine Connection")
+    st.session_state.api_url = st.text_input("Server Link", value=DEFAULT_URL, placeholder="https://app-name.onrender.com")
     
-    if not st.session_state.token:
-        st.info("🔒 Authentication Required")
-        with st.form("login"):
-            bot_id = st.text_input("Bot ID")
-            user = st.text_input("Username")
-            pwd = st.text_input("Password", type="password")
-            if st.form_submit_button("🚀 Launch Engine"):
-                resp = api_post("login", {"botId": bot_id, "username": user, "password": pwd})
-                if resp.get("ok"):
-                    st.session_state.token = "active"
-                    st.toast("Access Granted!", icon="✅")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error(f"Access Denied: {resp.get('error')}")
-    else:
-        st.success("🟢 System Online")
-        if st.button("🔌 Emergency Shutdown (Logout)"):
-            api_post("logout", {})
-            st.session_state.token = None
-            st.rerun()
-
-    st.markdown("---")
-    st.markdown("**⚙️ Settings**")
-    refresh_rate = st.slider("Poll Rate", 1, 5, 2)
-    auto_ref = st.checkbox("Live Update", value=True)
-    
-    if st.button("🔄 Force Reconnect WS"):
-        api_post("logout", {})
-        st.warning("Signal Sent. Please Relogin.")
-        st.session_state.token = None
+    if st.button("🔄 Refresh Status"):
         st.rerun()
+    
+    st.divider()
+    st.info("Render par 'app.py' chalna zaroori hai.")
 
 # =========================================================
-# 4. MAIN DASHBOARD UI
+# 4. MAIN LOGIC
 # =========================================================
 
-if st.session_state.token:
-    # --- FETCH DATA ---
-    status = api_get("status")
-    logs = api_get("get_logs")
-    
-    # Defaults
-    conn_status = False
-    rooms_count = 0
-    plugins = []
-    
-    if status:
-        conn_status = status.get("connected", False)
-        rooms_count = len(status.get("rooms", []))
-        plugins = status.get("plugins", [])
+# Title
+st.markdown("""
+<div style="text-align: center; margin-bottom: 20px;">
+    <h1 style="margin:0; text-shadow: 0 0 20px rgba(0,255,204,0.5);">🤖 HOWDIES <span style="color:#00ffcc;">COMMANDER</span></h1>
+</div>
+""", unsafe_allow_html=True)
 
-    # --- HTML HEADER ---
-    st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h1 style="margin:0; text-shadow: 0 0 10px rgba(255,255,255,0.3);">🚀 ENGINE <span style="color:#ff4b4b">V1</span></h1>
-        <div style="text-align:right;">
-            <div class="status-dot {'online' if conn_status else 'offline'}"></div>
-            <span style="font-weight:bold; color: {'#00ff41' if conn_status else '#ff2b2b'}">
-                {'ONLINE' if conn_status else 'OFFLINE'}
-            </span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+# Check Server
+status = api_get("status")
+server_online = status is not None
+is_connected = status.get("connected", False) if server_online else False
 
-    # --- METRIC CARDS (HTML GRID) ---
-    c1, c2, c3, c4 = st.columns(4)
+# --- SCENARIO 1: LOGIN SCREEN ---
+if not is_connected:
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    
+    if not server_online:
+        st.error("⚠️ Cannot Connect to Engine URL. Please check Sidebar settings.")
+    else:
+        st.subheader("🔐 Authenticate Bot")
+        
+        with st.form("login_form"):
+            # The 3 Fields you asked for
+            c1, c2 = st.columns(2)
+            with c1:
+                bot_id = st.text_input("Bot ID", placeholder="Ex: 123456")
+            with c2:
+                # Room name input (Logic: For now UI only, backend auth doesn't require it but user asked)
+                room_name = st.text_input("Target Room Name", placeholder="Ex: public")
+            
+            password = st.text_input("Bot Password", type="password")
+
+            if st.form_submit_button("🚀 LAUNCH ENGINE"):
+                if bot_id and password:
+                    with st.spinner("Initiating Uplink..."):
+                        # Logic: Username = Bot ID
+                        payload = {
+                            "botId": bot_id,
+                            "username": bot_id, 
+                            "password": password
+                        }
+                        resp, code = api_post("login", payload)
+                        
+                        if code == 200 and resp.get("ok"):
+                            st.success(f"Login Verified! Target: {room_name if room_name else 'Default'}")
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            st.error(f"Access Denied: {resp.get('error', 'Unknown Error')}")
+                else:
+                    st.warning("Bot ID & Password Required!")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- SCENARIO 2: DASHBOARD (Logged In) ---
+else:
+    # 1. Top Stats Cards
+    c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown(f"""
-        <div class="dashboard-card">
-            <div class="metric-label">WebSocket</div>
-            <div class="metric-value" style="color: {'#4caf50' if conn_status else '#f44336'}">
-                {'CNCTD' if conn_status else 'DISC'}
-            </div>
+        <div class="metric-card" style="border-left-color: #00ff41;">
+            <div class="val" style="color:#00ff41;">ONLINE</div>
+            <div class="lbl">SYSTEM STATUS</div>
         </div>
         """, unsafe_allow_html=True)
     with c2:
+        room_count = len(status.get("rooms", []))
         st.markdown(f"""
-        <div class="dashboard-card">
-            <div class="metric-label">Active Rooms</div>
-            <div class="metric-value">{rooms_count}</div>
+        <div class="metric-card">
+            <div class="val">{room_count}</div>
+            <div class="lbl">ACTIVE ROOMS</div>
         </div>
         """, unsafe_allow_html=True)
     with c3:
-        st.markdown(f"""
-        <div class="dashboard-card">
-            <div class="metric-label">Plugins</div>
-            <div class="metric-value">{len(plugins)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c4:
-        st.markdown(f"""
-        <div class="dashboard-card">
-            <div class="metric-label">Uptime</div>
-            <div class="metric-value" style="font-size:1.5rem">Running</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # --- TABS SECTION ---
-    tab_logs, tab_rooms, tab_game = st.tabs(["📜 TERMINAL LOGS", "🌐 NETWORK MAP", "🎮 GAME VISUALS"])
-
-    with tab_logs:
-        # Update Logs History
-        if logs and "logs" in logs:
-            for l in logs["logs"]:
-                ts = datetime.now().strftime("%H:%M:%S")
-                # Add CSS class based on content
-                css_class = "log-err" if "Error" in l else "log-msg"
-                html_line = f"""
-                <div class="log-line">
-                    <span class="log-time">[{ts}]</span>
-                    <span class="{css_class}">{l}</span>
-                </div>
-                """
-                st.session_state.log_history.insert(0, html_line)
-        
-        # Limit history
-        st.session_state.log_history = st.session_state.log_history[:200]
-        
-        # Render HTML Terminal
-        full_html = "".join(st.session_state.log_history)
-        st.markdown(f'<div class="terminal-window">{full_html}</div>', unsafe_allow_html=True)
-        
-        if st.button("Clear Terminal"):
-            st.session_state.log_history = []
+        # Logout Button Logic
+        if st.button("🛑 SHUTDOWN (LOGOUT)"):
+            api_post("logout", {})
+            time.sleep(0.5)
             st.rerun()
 
-    with tab_rooms:
-        col_r1, col_r2 = st.columns([1, 1])
-        with col_r1:
-            st.markdown("### 📡 Active Channels")
-            if status and status.get("rooms"):
-                # Stylish Table
-                rows = "".join([f"<tr><td style='padding:10px; border-bottom:1px solid #333;'>#{r}</td><td style='color:#00ff41;'>Active</td></tr>" for r in status['rooms']])
-                st.markdown(f"""
-                <table style="width:100%; border-collapse: collapse; background:#161b22; border-radius:8px;">
-                    {rows}
-                </table>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("No rooms joined yet. Send a message to the bot.")
+    # 2. Main Tabs
+    tab_logs, tab_rooms, tab_game = st.tabs(["📜 TERMINAL LOGS", "🌐 NETWORK", "🎮 GAME PREVIEW"])
 
-        with col_r2:
-            st.markdown("### 🔌 Loaded Modules")
-            if plugins:
-                badges = "".join([f'<span class="plugin-badge">{p}</span>' for p in plugins])
-                st.markdown(f"<div>{badges}</div>", unsafe_allow_html=True)
-            else:
-                st.warning("No plugins loaded.")
+    with tab_logs:
+        col_ref, col_emp = st.columns([1, 4])
+        if col_ref.button("⚡ Refresh Logs"):
+            st.rerun()
+
+        # Fetch Logs
+        logs_data = api_get("get_logs")
+        log_html = ""
+        
+        if logs_data and "logs" in logs_data:
+            for l in reversed(logs_data["logs"]): # Newest on top
+                ts = datetime.now().strftime("%H:%M:%S")
+                # Error highlighting
+                css = "log-err" if "Error" in l or "fail" in l.lower() else "log-txt"
+                log_html += f"""
+                <div class="log-row">
+                    <span class="log-ts">[{ts}]</span>
+                    <span class="{css}">{l}</span>
+                </div>
+                """
+        else:
+            log_html = "<div style='color:#555; text-align:center; padding:20px;'>No signal...</div>"
+
+        st.markdown(f'<div class="terminal-box">{log_html}</div>', unsafe_allow_html=True)
+
+    with tab_rooms:
+        st.markdown("### 📡 Active Connections")
+        if status.get("rooms"):
+            # Table View
+            room_df = pd.DataFrame(status["rooms"], columns=["Room ID"])
+            st.dataframe(room_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Bot is idle. Not joined in any rooms.")
+            
+        st.markdown("### 🧩 Loaded Modules")
+        plugins = status.get("plugins", [])
+        if plugins:
+            st.code(plugins)
+        else:
+            st.warning("No plugins loaded.")
 
     with tab_game:
-        st.markdown("### 🎲 Live Game Board (TicTacToe)")
-        # Placeholder for image rendering
+        st.markdown("### 🎲 Visual Output")
+        st.info("Latest Tic-Tac-Toe or Game Images will appear here in future updates.")
+        # Placeholder
         st.markdown("""
-        <div style="border: 2px dashed #444; padding: 40px; text-align: center; border-radius: 10px;">
-            <p style="color: #666;">Waiting for game data...</p>
-            <p style="font-size: 0.8rem; color: #444;">Images sent by plugins via Media_API will appear here in future updates.</p>
+        <div style="width:100%; height:150px; border:2px dashed #333; display:flex; align-items:center; justify-content:center; border-radius:10px; color:#555;">
+            WAITING FOR IMAGE DATA...
         </div>
         """, unsafe_allow_html=True)
-
-    # Auto Refresh Logic
-    if auto_ref:
-        time.sleep(refresh_rate)
-        st.rerun()
-
-else:
-    # LANDING PAGE
-    st.markdown("""
-    <div style="text-align:center; padding-top:50px;">
-        <h1>🛡️ HOWDIES ENGINE</h1>
-        <p style="color:#888;">Secure Connection Required</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Check Server Status
-    try:
-        r = requests.get(API_URL)
-        if r.status_code == 200:
-            st.success("✅ Core Engine Detected at Port 5000")
-        else:
-            st.warning("⚠️ Core Engine Unresponsive")
-    except:
-        st.error("❌ Core Engine Offline. Run 'python app.py' first.")
