@@ -1,7 +1,9 @@
 gunicorn
-Flask
-requests
-websocket-client  
-Pillow
+Flask==3.0.0
+Flask-SocketIO==5.3.6
+eventlet==0.33.3
+requests==2.31.0
+python-dotenv==1.0.1
+redis==5.0.1
 psycopg2-binary
-python-dotenv
+Pillow
