@@ -30,7 +30,8 @@ class HowdiesBot:
         entry = f"[{time.strftime('%X')}] {message}"
         print(entry)
         self.logs.append(entry)
-        if len(self.logs) > 100: self.logs.pop(0)
+        if len(self.logs) > 100: 
+            self.logs.pop(0)
 
     def login_api(self, username, password):
         try:
@@ -38,11 +39,7 @@ class HowdiesBot:
             r = requests.post(API_URL, json=payload)
             if r.status_code == 200:
                 data = r.json()
-                # Token extraction logic
-                self.token = data.get('token') 
-                if not self.token:
-                     self.token = data.get('data', {}).get('token')
-                
+                self.token = data.get('token') or data.get('data', {}).get('token')
                 self.user_data = {"username": username, "password": password}
                 return True, "Token received"
             return False, f"API Error: {r.text}"
@@ -85,13 +82,13 @@ class HowdiesBot:
             data = json.loads(message)
             handler = data.get("handler")
 
-            # Heartbeat / Processing
             if handler == "chatroommessage":
                 self.handle_chat(data)
 
         except Exception as e:
             self.log(f"Error parsing message: {e}")
 
+    # --- Updated handle_chat with safe game input filter ---
     def handle_chat(self, data):
         text = data.get("text", "")
         room = data.get("roomid")
@@ -109,7 +106,11 @@ class HowdiesBot:
         
         # Case 2: Game inputs without "!" (e.g., 1, 2, j)
         else:
-            # Send full text as command to plugins
+            # Only forward input if a game is active in this room
+            game = self.games.get_game(room)
+            if not game:
+                return  # No active game → ignore normal chat
+
             cmd = text.strip()
             args = []
             self.plugins.handle_command(cmd, room, user, args)
@@ -130,7 +131,6 @@ class HowdiesBot:
             self.log("Cannot send: WS disconnected")
 
     # --- API Wrappers for Plugins ---
-
     def send_message(self, room_id, text):
         payload = {
             "handler": "chatroommessage",
