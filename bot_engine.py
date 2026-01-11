@@ -38,14 +38,9 @@ class HowdiesBot:
             r = requests.post(API_URL, json=payload)
             if r.status_code == 200:
                 data = r.json()
-                # Assuming token is in response, adjust based on actual response structure
-                # In docs it implies a token is returned to use in URL
-                # If the response is just {token: ...}
+                # Token extraction logic
                 self.token = data.get('token') 
-                # Or sometimes headers? Docs say: You need a valid token.
-                # Assuming standard JSON return.
                 if not self.token:
-                     # Fallback if specific field name differs
                      self.token = data.get('data', {}).get('token')
                 
                 self.user_data = {"username": username, "password": password}
@@ -80,6 +75,10 @@ class HowdiesBot:
             "password": self.user_data['password']
         }
         self.send_json(login_payload)
+        
+        # Re-join active rooms if any
+        for room in self.active_rooms:
+            self.join_room(room)
 
     def on_message(self, ws, message):
         try:
@@ -89,14 +88,11 @@ class HowdiesBot:
             # Heartbeat / Processing
             if handler == "chatroommessage":
                 self.handle_chat(data)
-            
-            # Pass everything to plugins for hook processing
-            # self.plugins.dispatch_event(data)
 
         except Exception as e:
             self.log(f"Error parsing message: {e}")
 
-def handle_chat(self, data):
+    def handle_chat(self, data):
         text = data.get("text", "")
         room = data.get("roomid")
         user = data.get("username", "Unknown")
@@ -104,19 +100,20 @@ def handle_chat(self, data):
         if not text:
             return
 
-        # Case 1: Agar message "!" se shuru hota hai (Normal Commands)
+        # Case 1: Commands starting with "!" (e.g., !tic, !stop)
         if text.startswith("!"):
             parts = text[1:].split(" ")
             cmd = parts[0]
             args = parts[1:]
             self.plugins.handle_command(cmd, room, user, args)
         
-        # Case 2: Agar bina "!" ke hai (Game Inputs jaise 1, 2, j, stop)
+        # Case 2: Game inputs without "!" (e.g., 1, 2, j)
         else:
-            # Hum pura text plugin ko bhej denge, plugin khud decide karega
+            # Send full text as command to plugins
             cmd = text.strip()
             args = []
             self.plugins.handle_command(cmd, room, user, args)
+
     def on_error(self, ws, error):
         self.log(f"WS Error: {error}")
 
@@ -139,7 +136,7 @@ def handle_chat(self, data):
             "handler": "chatroommessage",
             "id": uuid.uuid4().hex,
             "type": "text",
-            "roomid": room_id, # Docs: "roomid": "RoomName" check confusion in docs
+            "roomid": room_id,
             "text": text,
             "url": "",
             "length": str(len(text))
