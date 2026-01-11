@@ -9,12 +9,12 @@ class PluginManager:
     def __init__(self, bot):
         self.bot = bot
         self.plugins = {}  # {name: module}
-
         if not os.path.exists(PLUGIN_DIR):
             os.makedirs(PLUGIN_DIR)
 
     def load_plugins(self):
         loaded = []
+        self.plugins.clear()
         for filename in os.listdir(PLUGIN_DIR):
             if filename.endswith(".py"):
                 plugin_name = filename[:-3]
@@ -31,10 +31,8 @@ class PluginManager:
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)
-
         if hasattr(module, 'setup'):
             module.setup(self.bot)
-
         self.plugins[name] = module
         print(f"[Plugins] Loaded {name}")
 
@@ -46,18 +44,17 @@ class PluginManager:
             return True
         return False
 
-    # ──────────────── Avatar-Friendly handle_command ────────────────
     def handle_command(self, command, room_id, user, args, avatar_url=None, **kwargs):
-        """Dispatch commands to loaded plugins with optional avatar support"""
+        """Dispatch commands to loaded plugins safely with avatar support"""
         for name, module in self.plugins.items():
             if hasattr(module, 'handle_command'):
                 try:
-                    # Try new signature with avatar_url
                     try:
+                        # Try passing avatar_url (new plugins)
                         if module.handle_command(self.bot, command, room_id, user, args, avatar_url):
                             return True
                     except TypeError:
-                        # Fallback for old plugins (without avatar_url)
+                        # Fallback for old plugins
                         if module.handle_command(self.bot, command, room_id, user, args):
                             return True
                 except Exception as e:
