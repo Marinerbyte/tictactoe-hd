@@ -1,198 +1,234 @@
-import os, json, time, threading, queue, uuid, requests, ssl, random
+# app.py
+import os
+import json
+import time
+import threading
+import uuid
 import websocket
-from flask import Flask
-import importlib, sys, traceback
+import ssl
+import importlib
+import sqlite3
+import psycopg2
+import requests
 
-# ======================
-# CONFIG
-# ======================
-BOT = {"ws": None, "token": "", "status": "DISCONNECTED", "rooms": {}, "should_run": False}
-ACTIVE_GAMES = {}           # {room_name: {game_id: {...}}}
-PLUGINS = {}                # {plugin_name: module}
-PLUGIN_FOLDER = "plugins"
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+# ============================================================
+# CONFIG & LOCKS
+# ============================================================
 DB_LOCK = threading.Lock()
 GAME_LOCK = threading.Lock()
+PLUGIN_LOCK = threading.Lock()
+BOT = {
+    "status": "DISCONNECTED",
+    "user": os.environ.get("BOT_USER", ""),
+    "pass": os.environ.get("BOT_PASS", ""),
+    "rooms": {},           # room_name: ws_instance
+    "token": "",
+    "user_id": None,
+    "domain": os.environ.get("BOT_DOMAIN", ""),
+    "should_run": False,
+    "avatars": {}
+}
+ACTIVE_GAMES = {}          # room_name: {game_name: {...}}
+PLUGINS = {}               # plugin_name: module
 
-# ======================
-# DATABASE (Thread Safe)
-# ======================
+# ============================================================
+# DATABASE
+# ============================================================
 DATABASE_URL = os.environ.get("DATABASE_URL")
-USE_SQLITE = not DATABASE_URL
+USE_SQLITE = False if DATABASE_URL else True
+DB_FILE_NAME = "bot.db"
 
-if USE_SQLITE:
-    import sqlite3
-    DB_FILE = "bot.db"
-    def get_db():
-        return sqlite3.connect(DB_FILE)
-else:
-    import psycopg2
-    def get_db():
-        return psycopg2.connect(DATABASE_URL, sslmode="require")
+def get_db():
+    if USE_SQLITE:
+        return sqlite3.connect(DB_FILE_NAME, check_same_thread=False)
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# Initialize database tables for users, games, plugin data
 def init_db():
     with DB_LOCK:
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("""CREATE TABLE IF NOT EXISTS users (
-                username VARCHAR PRIMARY KEY, score INTEGER DEFAULT 1000, wins INTEGER DEFAULT 0
-            )""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS game_scores (
-                username VARCHAR, game_name VARCHAR, score INTEGER DEFAULT 0, PRIMARY KEY(username, game_name)
-            )""")
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print("DB Init Error:", e)
+        conn = get_db()
+        c = conn.cursor()
+        # Users table
+        c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            username VARCHAR(255) PRIMARY KEY,
+            score INTEGER DEFAULT 1000,
+            wins INTEGER DEFAULT 0,
+            avatar_url TEXT
+        )
+        ''')
+        conn.commit()
+        conn.close()
+
+def update_score(username, points, avatar_url=None):
+    with DB_LOCK:
+        conn = get_db()
+        c = conn.cursor()
+        ph = "?" if USE_SQLITE else "%s"
+        c.execute(f"SELECT score, wins FROM users WHERE username={ph}", (username,))
+        data = c.fetchone()
+        if data:
+            new_score = data[0] + points
+            new_wins = data[1] + (1 if points > 0 else 0)
+            if avatar_url:
+                c.execute(f"UPDATE users SET score={ph}, wins={ph}, avatar_url={ph} WHERE username={ph}", 
+                          (new_score, new_wins, avatar_url, username))
+            else:
+                c.execute(f"UPDATE users SET score={ph}, wins={ph} WHERE username={ph}", (new_score, new_wins, username))
+        else:
+            new_score = 1000 + points
+            new_wins = 1 if points > 0 else 0
+            c.execute(f"INSERT INTO users (username, score, wins, avatar_url) VALUES ({ph},{ph},{ph},{ph})",
+                      (username, new_score, new_wins, avatar_url))
+        conn.commit()
+        conn.close()
+        return new_score
+
 init_db()
 
-# ======================
+# ============================================================
 # PLUGIN SYSTEM
-# ======================
-def load_plugin(name):
-    try:
-        if name in PLUGINS: return f"{name} already loaded"
-        module = importlib.import_module(f"{PLUGIN_FOLDER}.{name}")
-        if hasattr(module, "setup"):
-            module.setup(BOT, ACTIVE_GAMES)
-        PLUGINS[name] = module
-        return f"Loaded plugin: {name}"
-    except Exception as e:
-        traceback.print_exc()
-        return f"Error loading plugin {name}: {e}"
+# ============================================================
+PLUGIN_FOLDER = "plugins"
 
-def unload_plugin(name):
-    try:
-        if name not in PLUGINS: return f"{name} not loaded"
-        module = PLUGINS[name]
-        if hasattr(module, "teardown"):
-            module.teardown()
-        del sys.modules[f"{PLUGIN_FOLDER}.{name}"]
-        del PLUGINS[name]
-        return f"Unloaded plugin: {name}"
-    except Exception as e:
-        traceback.print_exc()
-        return f"Error unloading plugin {name}: {e}"
+def load_plugin(plugin_name):
+    with PLUGIN_LOCK:
+        if plugin_name in PLUGINS:
+            return PLUGINS[plugin_name]
+        try:
+            module = importlib.import_module(f"{PLUGIN_FOLDER}.{plugin_name}")
+            if hasattr(module, "setup"):
+                module.setup(BOT, ACTIVE_GAMES, update_score)
+            PLUGINS[plugin_name] = module
+            print(f"[PLUGIN] Loaded: {plugin_name}")
+            return module
+        except Exception as e:
+            print(f"[PLUGIN ERROR] {plugin_name}: {e}")
+            return None
 
-def reload_plugin(name):
-    unload_plugin(name)
-    return load_plugin(name)
+def unload_plugin(plugin_name):
+    with PLUGIN_LOCK:
+        if plugin_name in PLUGINS:
+            try:
+                if hasattr(PLUGINS[plugin_name], "teardown"):
+                    PLUGINS[plugin_name].teardown()
+                del PLUGINS[plugin_name]
+                print(f"[PLUGIN] Unloaded: {plugin_name}")
+            except Exception as e:
+                print(f"[PLUGIN ERROR] Unload {plugin_name}: {e}")
 
-# Auto-load all plugins from folder on startup
-def load_all_plugins():
-    for file in os.listdir(PLUGIN_FOLDER):
-        if file.endswith(".py") and file != "__init__.py":
-            load_plugin(file[:-3])
-load_all_plugins()
-
-# ======================
-# WEBSOCKET BOT CORE
-# ======================
+# ============================================================
+# WEBSOCKET BOT CORE (Multi-Room)
+# ============================================================
 def perform_login(username, password):
-    url = "https://api.howdies.app/api/login"
     try:
-        r = requests.post(url, json={"username": username, "password": password}, timeout=10)
-        data = r.json()
+        resp = requests.post("https://api.howdies.app/api/login", json={"username": username, "password": password}, timeout=15)
+        data = resp.json()
         token = data.get("token") or data.get("data", {}).get("token")
+        user_id = data.get("id") or data.get("data", {}).get("id")
+        BOT["user_id"] = user_id
         return token
-    except:
+    except Exception as e:
+        print(f"[LOGIN ERROR] {e}")
         return None
 
-def bot_ws_thread(username, password, room):
-    while BOT["should_run"]:
-        try:
-            if not BOT["token"]:
-                BOT["status"] = "FETCHING TOKEN"
-                BOT["token"] = perform_login(username, password)
-                if not BOT["token"]:
-                    BOT["status"] = "AUTH FAILED"
-                    time.sleep(10)
-                    continue
+def start_room(room_name):
+    if room_name in BOT["rooms"]:
+        print(f"[ROOM] Already connected: {room_name}")
+        return
 
-            BOT["status"] = "CONNECTING WS"
-            ws_url = f"wss://app.howdies.app/howdies?token={BOT['token']}"
-            ws = websocket.WebSocketApp(ws_url, on_open=on_open, on_message=on_message,
+    def run_ws():
+        while BOT["should_run"]:
+            if not BOT["token"]:
+                BOT["token"] = perform_login(BOT["user"], BOT["pass"])
+                if not BOT["token"]:
+                    time.sleep(5)
+                    continue
+            url = f"wss://app.howdies.app/howdies?token={BOT['token']}"
+            ws = websocket.WebSocketApp(url, on_open=lambda ws: on_open(ws, room_name),
+                                        on_message=lambda ws, msg: on_message(ws, msg, room_name),
                                         on_error=on_error, on_close=on_close)
-            BOT["ws"] = ws
+            BOT["rooms"][room_name] = ws
             ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
-        except Exception as e:
-            print("WS CRASH:", e)
             time.sleep(5)
 
-def on_open(ws):
-    print("WS OPENED")
-    BOT["status"] = "ONLINE"
+    threading.Thread(target=run_ws, daemon=True).start()
 
-def on_message(ws, msg):
+def on_open(ws, room_name):
+    print(f"[WS] Connected to {room_name}")
+    join_pkt = {"handler": "joinchatroom", "id": str(time.time()), "name": room_name, "roomPassword": ""}
+    ws.send(json.dumps(join_pkt))
+
+def on_message(ws, message, room_name):
     try:
-        data = json.loads(msg)
-        # pass message to plugins
-        for plugin in PLUGINS.values():
-            if hasattr(plugin, "on_message"):
-                try: plugin.on_message(data)
-                except: traceback.print_exc()
-    except: traceback.print_exc()
+        data = json.loads(message)
+        sender = data.get("from") or data.get("username")
+        text = data.get("text")
+        if sender and text:
+            # Call all plugins safely
+            with PLUGIN_LOCK:
+                for p in PLUGINS.values():
+                    try:
+                        if hasattr(p, "on_message"):
+                            p.on_message(sender, text, room_name)
+                    except Exception as e:
+                        print(f"[PLUGIN MSG ERROR] {e}")
+    except Exception as e:
+        print(f"[MSG ERROR] {e}")
 
-def on_error(ws, err): print("WS ERROR:", err)
-def on_close(ws, c, r): BOT["status"] = "DISCONNECTED"
+def on_error(ws, error):
+    print(f"[WS ERROR] {error}")
 
-def send_msg(room, text, type="text"):
-    if BOT["ws"] and room:
-        pkt = {"handler":"chatroommessage","id":str(time.time()),"roomid":room,"type":type,"text":text,"length":"0"}
-        try: BOT["ws"].send(json.dumps(pkt))
-        except: pass
+def on_close(ws, code, msg):
+    print(f"[WS CLOSED] {code} | {msg}")
 
-# ======================
-# GAME ENGINE
-# ======================
-def start_game(room, game_name, players=[]):
-    with GAME_LOCK:
-        game_id = str(uuid.uuid4())
-        if room not in ACTIVE_GAMES: ACTIVE_GAMES[room] = {}
-        ACTIVE_GAMES[room][game_id] = {
-            "name": game_name, "players": players, "state": {}, "last_active": time.time()
-        }
-        return game_id
+# ============================================================
+# DASHBOARD ENDPOINTS
+# ============================================================
+MASTER_USER = os.environ.get("MASTER_USER", "admin")
+MASTER_PASS = os.environ.get("MASTER_PASS", "admin")
 
-def end_game(room, game_id):
-    with GAME_LOCK:
-        game = ACTIVE_GAMES.get(room, {}).pop(game_id, None)
-        if game:
-            send_msg(room, f"🛑 Game {game['name']} ended due to inactivity.")
-
-def idle_checker():
-    while True:
-        time.sleep(5)
-        now = time.time()
-        with GAME_LOCK:
-            for room, games in list(ACTIVE_GAMES.items()):
-                for gid, game in list(games.items()):
-                    if now - game["last_active"] > 90:
-                        end_game(room, gid)
-
-threading.Thread(target=idle_checker, daemon=True).start()
-
-# ======================
-# FLASK DASHBOARD (Simplest Endpoint for Testing)
-# ======================
-flask_app = Flask(__name__)
-
-@flask_app.route("/api/load_plugin", methods=["POST"])
-def api_load_plugin():
+@app.route("/dashboard/login", methods=["POST"])
+def dashboard_login():
     data = request.json
-    name = data.get("name")
-    result = load_plugin(name)
-    return {"result": result}
+    if data.get("user") == MASTER_USER and data.get("pass") == MASTER_PASS:
+        return jsonify({"status": "ok"})
+    return jsonify({"status": "fail"})
 
-@flask_app.route("/api/unload_plugin", methods=["POST"])
-def api_unload_plugin():
+@app.route("/dashboard/start_room", methods=["POST"])
+def dashboard_start_room():
     data = request.json
-    name = data.get("name")
-    result = unload_plugin(name)
-    return {"result": result}
+    room_name = data.get("room")
+    if not room_name: return jsonify({"status": "fail", "msg": "No room"})
+    start_room(room_name)
+    return jsonify({"status": "ok", "room": room_name})
+
+@app.route("/dashboard/load_plugin", methods=["POST"])
+def dashboard_load_plugin():
+    data = request.json
+    plugin_name = data.get("plugin")
+    if not plugin_name: return jsonify({"status": "fail", "msg": "No plugin"})
+    mod = load_plugin(plugin_name)
+    return jsonify({"status": "ok" if mod else "fail", "plugin": plugin_name})
+
+@app.route("/dashboard/unload_plugin", methods=["POST"])
+def dashboard_unload_plugin():
+    data = request.json
+    plugin_name = data.get("plugin")
+    if not plugin_name: return jsonify({"status": "fail", "msg": "No plugin"})
+    unload_plugin(plugin_name)
+    return jsonify({"status": "ok", "plugin": plugin_name})
+
+# ============================================================
+# RUN BOT
+# ============================================================
+def start_bot():
+    BOT["should_run"] = True
+    print("[BOT] Starting...")
 
 if __name__ == "__main__":
-    BOT["should_run"] = True
-    threading.Thread(target=bot_ws_thread, args=("master_user","master_pass","MainRoom"), daemon=True).start()
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    start_bot()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
