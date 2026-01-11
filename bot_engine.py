@@ -17,6 +17,7 @@ class HowdiesBot:
         self.token = None
         self.ws = None
         self.user_data = {}
+        self.user_id = None # Numeric ID store karne ke liye
         self.active_rooms = []
         self.logs = []
         self.running = False
@@ -30,8 +31,7 @@ class HowdiesBot:
         entry = f"[{time.strftime('%X')}] {message}"
         print(entry)
         self.logs.append(entry)
-        if len(self.logs) > 100: 
-            self.logs.pop(0)
+        if len(self.logs) > 100: self.logs.pop(0)
 
     def login_api(self, username, password):
         try:
@@ -39,8 +39,21 @@ class HowdiesBot:
             r = requests.post(API_URL, json=payload)
             if r.status_code == 200:
                 data = r.json()
-                self.token = data.get('token') or data.get('data', {}).get('token')
+                
+                # 1. Token nikalna
+                self.token = data.get('token') 
+                if not self.token:
+                     self.token = data.get('data', {}).get('token')
+                
+                # 2. Numeric ID nikalna (Zaroori for Image Upload)
+                # API structure vary kar sakta hai, hum sab try karenge
+                self.user_id = data.get('id') or data.get('user', {}).get('id') or data.get('data', {}).get('id')
+                
+                # Agar login response me ID nahi mili, toh '0' rakh lete hain
+                if not self.user_id: self.user_id = 0
+
                 self.user_data = {"username": username, "password": password}
+                self.log(f"Logged in as {username} (ID: {self.user_id})")
                 return True, "Token received"
             return False, f"API Error: {r.text}"
         except Exception as e:
@@ -65,7 +78,6 @@ class HowdiesBot:
 
     def on_open(self, ws):
         self.log("WebSocket Connected")
-        # Send Login Packet
         login_payload = {
             "handler": "login",
             "username": self.user_data['username'],
@@ -73,7 +85,6 @@ class HowdiesBot:
         }
         self.send_json(login_payload)
         
-        # Re-join active rooms if any
         for room in self.active_rooms:
             self.join_room(room)
 
@@ -81,39 +92,34 @@ class HowdiesBot:
         try:
             data = json.loads(message)
             handler = data.get("handler")
-
             if handler == "chatroommessage":
                 self.handle_chat(data)
-
         except Exception as e:
             self.log(f"Error parsing message: {e}")
 
-    # --- Updated handle_chat with safe game input filter ---
+    # --- YAHAN CHANGE KIYA HAI COMMANDS KE LIYE ---
     def handle_chat(self, data):
         text = data.get("text", "")
         room = data.get("roomid")
         user = data.get("username", "Unknown")
 
-        if not text:
-            return
+        if not text: return
 
-        # Case 1: Commands starting with "!" (e.g., !tic, !stop)
+        # Case 1: Agar "!" laga hai (Commands)
         if text.startswith("!"):
             parts = text[1:].split(" ")
             cmd = parts[0]
             args = parts[1:]
             self.plugins.handle_command(cmd, room, user, args)
         
-        # Case 2: Game inputs without "!" (e.g., 1, 2, j)
+        # Case 2: Agar "!" nahi laga (Game Inputs like 1, 2)
         else:
-            # Only forward input if a game is active in this room
-            game = self.games.get_game(room)
-            if not game:
-                return  # No active game → ignore normal chat
-
-            cmd = text.strip()
-            args = []
-            self.plugins.handle_command(cmd, room, user, args)
+            # Sirf tab process karo agar game chal raha ho
+            active_game = self.games.get_game(room)
+            if active_game:
+                cmd = text.strip()
+                args = []
+                self.plugins.handle_command(cmd, room, user, args)
 
     def on_error(self, ws, error):
         self.log(f"WS Error: {error}")
@@ -127,10 +133,7 @@ class HowdiesBot:
     def send_json(self, data):
         if self.ws and self.ws.sock and self.ws.sock.connected:
             self.ws.send(json.dumps(data))
-        else:
-            self.log("Cannot send: WS disconnected")
 
-    # --- API Wrappers for Plugins ---
     def send_message(self, room_id, text):
         payload = {
             "handler": "chatroommessage",
