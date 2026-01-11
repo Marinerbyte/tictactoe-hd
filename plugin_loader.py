@@ -5,57 +5,123 @@ import traceback
 
 PLUGIN_DIR = "plugins"
 
+
 class PluginManager:
     def __init__(self, bot):
         self.bot = bot
-        self.plugins = {} # {name: module}
-        
+        self.plugins = {}  # {name: module}
+
         if not os.path.exists(PLUGIN_DIR):
             os.makedirs(PLUGIN_DIR)
 
+    # ──────────────────────────────────────────
+    # Load all plugins
+    # ──────────────────────────────────────────
+
     def load_plugins(self):
         loaded = []
+
         for filename in os.listdir(PLUGIN_DIR):
-            if filename.endswith(".py"):
-                plugin_name = filename[:-3]
-                try:
-                    self.load_plugin(plugin_name)
-                    loaded.append(plugin_name)
-                except Exception as e:
-                    print(f"[Plugins] Error loading {plugin_name}: {e}")
+            if not filename.endswith(".py"):
+                continue
+
+            plugin_name = filename[:-3]
+
+            try:
+                self.load_plugin(plugin_name)
+                loaded.append(plugin_name)
+            except Exception as e:
+                print(f"[Plugins] Failed to load {plugin_name}: {e}")
+                traceback.print_exc()
+
         return loaded
+
+    # ──────────────────────────────────────────
+    # Load single plugin
+    # ──────────────────────────────────────────
 
     def load_plugin(self, name):
         path = os.path.join(PLUGIN_DIR, f"{name}.py")
+
+        if not os.path.isfile(path):
+            raise FileNotFoundError(path)
+
         spec = importlib.util.spec_from_file_location(name, path)
         module = importlib.util.module_from_spec(spec)
+
         sys.modules[name] = module
         spec.loader.exec_module(module)
-        
-        # Check if plugin has setup function
-        if hasattr(module, 'setup'):
+
+        # Optional setup(bot)
+        if hasattr(module, "setup"):
             module.setup(self.bot)
-            
+
         self.plugins[name] = module
-        print(f"[Plugins] Loaded {name}")
+        print(f"[Plugins] Loaded: {name}")
+
+    # ──────────────────────────────────────────
+    # Unload plugin
+    # ──────────────────────────────────────────
 
     def unload_plugin(self, name):
-        if name in self.plugins:
-            del self.plugins[name]
-            if name in sys.modules:
-                del sys.modules[name]
-            return True
-        return False
+        if name not in self.plugins:
+            return False
 
-    def handle_command(self, command, room_id, user, args):
-        """Dispatch commands to loaded plugins"""
+        del self.plugins[name]
+
+        if name in sys.modules:
+            del sys.modules[name]
+
+        print(f"[Plugins] Unloaded: {name}")
+        return True
+
+    # ──────────────────────────────────────────
+    # Command dispatcher (UPDATED)
+    # ──────────────────────────────────────────
+
+    def handle_command(self, cmd, room, user, args, avatar_url=None):
+        """
+        Dispatch command to plugins.
+
+        Plugin handle_command signature:
+        handle_command(bot, cmd, room, user, args, avatar_url=None) -> bool
+        """
+
         for name, module in self.plugins.items():
-            if hasattr(module, 'handle_command'):
+            if not hasattr(module, "handle_command"):
+                continue
+
+            try:
+                handled = module.handle_command(
+                    self.bot,
+                    cmd,
+                    room,
+                    user,
+                    args,
+                    avatar_url
+                )
+
+                if handled:
+                    return True
+
+            except TypeError:
+                # Backward compatibility (old plugins without avatar_url)
                 try:
-                    # Plugins return True if they handled the command
-                    if module.handle_command(self.bot, command, room_id, user, args):
+                    handled = module.handle_command(
+                        self.bot,
+                        cmd,
+                        room,
+                        user,
+                        args
+                    )
+                    if handled:
                         return True
                 except Exception as e:
                     print(f"[Plugin Error] {name}: {e}")
                     traceback.print_exc()
+
+            except Exception as e:
+                print(f"[Plugin Error] {name}: {e}")
+                traceback.print_exc()
+
         return False
