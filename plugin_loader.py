@@ -8,8 +8,8 @@ PLUGIN_DIR = "plugins"
 class PluginManager:
     def __init__(self, bot):
         self.bot = bot
-        self.plugins = {} # {name: module}
-        
+        self.plugins = {}  # {name: module}
+
         if not os.path.exists(PLUGIN_DIR):
             os.makedirs(PLUGIN_DIR)
 
@@ -31,11 +31,10 @@ class PluginManager:
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)
-        
-        # Check if plugin has setup function
+
         if hasattr(module, 'setup'):
             module.setup(self.bot)
-            
+
         self.plugins[name] = module
         print(f"[Plugins] Loaded {name}")
 
@@ -47,14 +46,20 @@ class PluginManager:
             return True
         return False
 
-    def handle_command(self, command, room_id, user, args):
-        """Dispatch commands to loaded plugins"""
+    # ──────────────── Avatar-Friendly handle_command ────────────────
+    def handle_command(self, command, room_id, user, args, avatar_url=None, **kwargs):
+        """Dispatch commands to loaded plugins with optional avatar support"""
         for name, module in self.plugins.items():
             if hasattr(module, 'handle_command'):
                 try:
-                    # Plugins return True if they handled the command
-                    if module.handle_command(self.bot, command, room_id, user, args):
-                        return True
+                    # Try new signature with avatar_url
+                    try:
+                        if module.handle_command(self.bot, command, room_id, user, args, avatar_url):
+                            return True
+                    except TypeError:
+                        # Fallback for old plugins (without avatar_url)
+                        if module.handle_command(self.bot, command, room_id, user, args):
+                            return True
                 except Exception as e:
                     print(f"[Plugin Error] {name}: {e}")
                     traceback.print_exc()
