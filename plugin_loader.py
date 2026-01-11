@@ -8,13 +8,13 @@ PLUGIN_DIR = "plugins"
 class PluginManager:
     def __init__(self, bot):
         self.bot = bot
-        self.plugins = {}
+        self.plugins = {} # {name: module}
+        
         if not os.path.exists(PLUGIN_DIR):
             os.makedirs(PLUGIN_DIR)
 
     def load_plugins(self):
         loaded = []
-        self.plugins.clear()
         for filename in os.listdir(PLUGIN_DIR):
             if filename.endswith(".py"):
                 plugin_name = filename[:-3]
@@ -31,24 +31,30 @@ class PluginManager:
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)
+        
+        # Check if plugin has setup function
         if hasattr(module, 'setup'):
             module.setup(self.bot)
+            
         self.plugins[name] = module
         print(f"[Plugins] Loaded {name}")
 
-    # --- FIX: Accept *args and **kwargs to handle any extra parameters safely ---
-    def handle_command(self, command, room_id, user, args, avatar_url=None, **kwargs):
+    def unload_plugin(self, name):
+        if name in self.plugins:
+            del self.plugins[name]
+            if name in sys.modules:
+                del sys.modules[name]
+            return True
+        return False
+
+    def handle_command(self, command, room_id, user, args):
+        """Dispatch commands to loaded plugins"""
         for name, module in self.plugins.items():
             if hasattr(module, 'handle_command'):
                 try:
-                    # Try calling with avatar_url
-                    try:
-                        if module.handle_command(self.bot, command, room_id, user, args, avatar_url):
-                            return True
-                    except TypeError:
-                        # Fallback: Old plugins jo avatar_url nahi lete
-                        if module.handle_command(self.bot, command, room_id, user, args):
-                            return True
+                    # Plugins return True if they handled the command
+                    if module.handle_command(self.bot, command, room_id, user, args):
+                        return True
                 except Exception as e:
                     print(f"[Plugin Error] {name}: {e}")
                     traceback.print_exc()
