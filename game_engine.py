@@ -4,11 +4,10 @@ import threading
 class GameEngine:
     def __init__(self, bot):
         self.bot = bot
-        self.games = {} # {room_id: {game_type: 'xyz', state: {}, last_act: 0}}
+        self.games = {}  # {room_id: {type, state, players, last_activity}}
         self.lock = threading.Lock()
         self.running = True
-        
-        # Start cleanup thread
+        # Cleanup thread for inactivity
         self.cleaner = threading.Thread(target=self.cleanup_loop, daemon=True)
         self.cleaner.start()
 
@@ -46,12 +45,10 @@ class GameEngine:
             time.sleep(10)
             now = time.time()
             to_remove = []
-            
             with self.lock:
                 for room_id, game in self.games.items():
-                    if now - game["last_activity"] > 90:
+                    if now - game["last_activity"] > 90:  # 90s inactivity
                         to_remove.append(room_id)
-            
             for room_id in to_remove:
                 game = self.end_game(room_id, "timeout")
                 if game:
