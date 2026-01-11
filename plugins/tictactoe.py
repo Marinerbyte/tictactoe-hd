@@ -2,44 +2,81 @@ import time
 import random
 import requests
 import io
-import threading
-from PIL import Image, ImageDraw, ImageFont
+import sys
+import os
+from PIL import Image, ImageDraw
+
+# Root directory se db.py import karne ke liye path setup
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import db
 
 # --- Global Game State ---
 games = {} # room_id -> GameInstance
 
+# --- Helper: Database Money Management ---
+def update_coins(user_id, amount):
+    """Coins add (+) ya remove (-) karta hai"""
+    conn = db.get_connection()
+    if not conn: return
+    cur = conn.cursor()
+    try:
+        # Ensure user exists
+        try:
+            cur.execute("INSERT INTO users (user_id, username, global_score) VALUES (%s, %s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
+        except:
+            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score) VALUES (?, ?, 0)", (user_id, user_id))
+        
+        # Update Score
+        query = "UPDATE users SET global_score = global_score + %s WHERE user_id = %s"
+        # SQLite fallback
+        if not db.DATABASE_URL.startswith("postgres"):
+            query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
+            
+        cur.execute(query, (amount, user_id))
+        conn.commit()
+    except Exception as e:
+        print(f"DB Error: {e}")
+    finally:
+        conn.close()
+
 # --- Helper: Upload Image to Howdies ---
 def upload_image(bot, image):
-    """Image ko memory se direct Howdies par upload karta hai"""
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
     
     url = "https://api.howdies.app/api/upload"
     try:
+        # UserID is crucial for Howdies API
         files = {'file': ('tic.png', img_byte_arr, 'image/png')}
-        data = {'token': bot.token, 'uploadType': 'image'}
+        data = {
+            'token': bot.token,
+            'uploadType': 'image',
+            'UserID': bot.user_data.get('username', 'bot') # Fix: Sending UserID
+        }
+        
         r = requests.post(url, files=files, data=data)
         res = r.json()
         
-        # URL nikalna (structure vary kar sakta hai)
-        link = res.get('url') or res.get('data', {}).get('url')
+        # Extract URL logic
+        link = res.get('url') 
+        if not link:
+            link = res.get('data', {}).get('url')
+            
+        if not link:
+            print(f"[Upload Fail] Response: {r.text}")
+            
         return link
     except Exception as e:
-        print(f"Upload Error: {e}")
+        print(f"[Upload Error] {e}")
         return None
 
-# --- Helper: Draw Graphics (No External Fonts) ---
+# --- Helper: Draw Board ---
 def draw_board(board_state):
-    """
-    Board banata hai.
-    1-9: Faint (Halke)
-    X/O: Sharp (Tez)
-    """
-    # Canvas (Black Background)
+    # Canvas
     size = 400
     cell = size // 3
-    img = Image.new('RGB', (size, size), color=(20, 20, 20))
+    img = Image.new('RGB', (size, size), color=(20, 20, 20)) # Dark Background
     d = ImageDraw.Draw(img)
 
     # Grid Lines (White)
@@ -53,83 +90,67 @@ def draw_board(board_state):
         col = i % 3
         x = col * cell
         y = row * cell
-        center_x = x + cell // 2
-        center_y = y + cell // 2
+        
+        # Center coordinates
+        cx = x + cell // 2
+        cy = y + cell // 2
         
         val = board_state[i]
 
         if val is None:
-            # Empty Box: Draw Faint Number (Halka Number)
-            # Drawing generic shape for number to avoid font dependency issues or using default
-            d.text((center_x - 5, center_y - 10), str(i+1), fill=(80, 80, 80)) # Very faint gray
-            
-            # Note: Agar aapke server pe font nahi hai, to default font bahut chhota hota hai.
-            # Isliye hum yahan chhote circles draw karke hint de sakte hain ya default use karein.
-            # Better Visual: Halka sa number draw karna default font se.
-
+            # Empty Box: Draw Faint Number (Halka Color)
+            # Default font used to avoid file dependency
+            d.text((cx - 5, cy - 10), str(i+1), fill=(60, 60, 60)) 
         elif val == 'X':
             # Sharp RED Cross
-            offset = 30
-            d.line([(x + offset, y + offset), (x + cell - offset, y + cell - offset)], fill=(255, 50, 50), width=15)
-            d.line([(x + cell - offset, y + offset), (x + offset, y + cell - offset)], fill=(255, 50, 50), width=15)
-            
+            offset = 35
+            d.line([(x + offset, y + offset), (x + cell - offset, y + cell - offset)], fill=(255, 40, 40), width=12)
+            d.line([(x + cell - offset, y + offset), (x + offset, y + cell - offset)], fill=(255, 40, 40), width=12)
         elif val == 'O':
             # Sharp BLUE Circle
-            offset = 30
-            d.ellipse([(x + offset, y + offset), (x + cell - offset, y + cell - offset)], outline=(50, 100, 255), width=12)
+            offset = 35
+            d.ellipse([(x + offset, y + offset), (x + cell - offset, y + cell - offset)], outline=(40, 100, 255), width=12)
 
     return img
 
-def draw_winner_card(username, winner_symbol, user_id=None):
-    """Winner ka Card banata hai DP ke sath"""
+# --- Helper: Draw Winner Card ---
+def draw_winner_card(username, winner_symbol):
     W, H = 500, 250
-    img = Image.new('RGB', (W, H), color=(10, 10, 30))
+    # Background depends on winner
+    bg_color = (30, 10, 10) if winner_symbol == 'X' else (10, 10, 30)
+    img = Image.new('RGB', (W, H), color=bg_color)
     d = ImageDraw.Draw(img)
     
-    # Background pattern
-    d.rectangle([(10, 10), (W-10, H-10)], outline=(winner_symbol == 'X' and (255,50,50) or (50,100,255)), width=5)
+    # Border
+    color = (255, 50, 50) if winner_symbol == 'X' else (50, 100, 255)
+    d.rectangle([(10, 10), (W-10, H-10)], outline=color, width=5)
 
-    # Try Fetching DP (Placeholder logic - Howdies avatar usually follows a pattern or API)
-    # Yahan hum ek dummy avatar bana rahe hain agar real fetch na ho paye
-    # Real app mein: requests.get(avatar_url) karke paste karein
-    try:
-        # Example Avatar Fetch (Generic Placeholder)
-        avatar_url = f"https://api.howdies.app/api/avatar/{user_id}" # Hypothetical
-        # Agar real API pata ho to wahan se layein. Abhi hum Generate karenge.
-        
-        # Avatar Circle
-        d.ellipse([(30, 50), (180, 200)], fill=(50, 50, 50), outline="white", width=3)
-        d.text((80, 110), username[:2].upper(), fill="white") # Initials
-        
-    except:
-        pass
+    # Fake Avatar (Circle with Initial)
+    d.ellipse([(40, 50), (160, 170)], fill=(50, 50, 50), outline="white", width=3)
+    d.text((85, 95), username[:2].upper(), fill="white") # Initials
 
     # Winner Text
-    d.text((220, 80), "WINNER!", fill="yellow")
-    d.text((220, 120), username, fill="white")
+    d.text((200, 80), "👑 WINNER 👑", fill="yellow")
+    d.text((200, 110), f"@{username}", fill="white")
     
-    # Symbol
+    # Symbol Graphic
     if winner_symbol == 'X':
-        d.line([(400, 50), (450, 100)], fill="red", width=10)
-        d.line([(450, 50), (400, 100)], fill="red", width=10)
+        d.text((380, 80), "X", fill="red")
     else:
-        d.ellipse([(400, 50), (450, 100)], outline="blue", width=10)
+        d.text((380, 80), "O", fill="blue")
 
     return img
 
-# --- Game Logic Class ---
+# --- Game Class ---
 class TicTacToe:
-    def __init__(self, room_id, creator_id, creator_name):
+    def __init__(self, room_id, creator_id):
         self.room_id = room_id
-        self.p1_id = creator_id
-        self.p1_name = creator_name
-        self.p2_id = None
+        self.p1_name = creator_id
         self.p2_name = None
-        
         self.board = [None] * 9
-        self.turn = 'X' # X always starts
-        self.state = 'setup_mode' # setup_mode, setup_bet, waiting_join, playing
-        self.mode = None # 1=Single, 2=Multi
+        self.turn = 'X'
+        self.state = 'setup_mode' # setup_mode -> setup_bet -> waiting_join -> playing
+        self.mode = None # 1=Bot, 2=Multi
         self.bet = 0
         self.last_interaction = time.time()
 
@@ -138,176 +159,169 @@ class TicTacToe:
         for a, b, c in wins:
             if self.board[a] and self.board[a] == self.board[b] == self.board[c]:
                 return self.board[a]
-        if None not in self.board:
-            return 'draw'
+        if None not in self.board: return 'draw'
         return None
 
     def bot_move(self):
-        # Simple AI: Random empty spot
+        # 1. Try to win
+        # 2. Block opponent
+        # 3. Random
         empty = [i for i, x in enumerate(self.board) if x is None]
-        if empty:
-            return random.choice(empty)
-        return None
+        if not empty: return None
+        return random.choice(empty)
 
-# --- Main Command Handler ---
+# --- Main Handler ---
 def handle_command(bot, command, room_id, user, args):
-    
     global games
     current_game = games.get(room_id)
 
-    # 1. New Game Command
+    # --- START GAME ---
     if command == "tic":
         if current_game:
-            bot.send_message(room_id, "⚠️ Game already running! Type 'stop' to end it.")
+            bot.send_message(room_id, "⚠️ Game already running! Type 'stop' to end.")
             return True
         
-        # Create Game
-        games[room_id] = TicTacToe(room_id, user, user)
+        games[room_id] = TicTacToe(room_id, user)
         bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose Mode:\n1️⃣ Single Player (vs Bot)\n2️⃣ Multiplayer (vs Human)")
         return True
 
-    # 2. Stop Command
+    # --- STOP GAME ---
     if command == "stop" and current_game:
-        # Only players or admin can stop
-        if user in [current_game.p1_name, current_game.p2_name] or user == bot.user_data.get('username'):
-            del games[room_id]
-            bot.send_message(room_id, "🛑 Game stopped.")
+        # Refund coins if game stops mid-way (Optional logic)
+        del games[room_id]
+        bot.send_message(room_id, "🛑 Game stopped.")
         return True
 
-    # 3. Handle Inputs based on State
+    # --- GAME INPUTS ---
     if current_game:
         game = current_game
-        game.last_interaction = time.time()
-
-        # --- SETUP: Choose Mode ---
+        
+        # 1. SETUP MODE
         if game.state == 'setup_mode' and user == game.p1_name:
             if command == "1":
                 game.mode = 1
                 game.p2_name = "Bot"
-                game.p2_id = "bot"
                 game.state = 'setup_bet'
-                bot.send_message(room_id, "💰 Choose Bet:\n1️⃣ No Bet (Fun)\n2️⃣ 100 Coins")
+                game.last_interaction = time.time() # ✅ Valid Input
+                bot.send_message(room_id, "💰 Bet Amount?\n1️⃣ Fun (0 Coins)\n2️⃣ 100 Coins")
                 return True
             elif command == "2":
                 game.mode = 2
                 game.state = 'setup_bet'
-                bot.send_message(room_id, "💰 Choose Bet:\n1️⃣ No Bet (Fun)\n2️⃣ 100 Coins")
+                game.last_interaction = time.time() # ✅ Valid Input
+                bot.send_message(room_id, "💰 Bet Amount?\n1️⃣ Fun (0 Coins)\n2️⃣ 100 Coins")
                 return True
 
-        # --- SETUP: Choose Bet ---
+        # 2. SETUP BET
         elif game.state == 'setup_bet' and user == game.p1_name:
-            if command == "1": game.bet = 0
-            elif command == "2": game.bet = 100
-            
-            if game.mode == 1:
-                game.state = 'playing'
-                # Start Game (Bot)
-                img = draw_board(game.board)
-                link = upload_image(bot, img)
-                bot.send_message(room_id, f"🔥 Game Started! (Vs Bot)\n@{game.p1_name} (X) vs Bot (O)\nType **1-9** to play.")
-                if link:
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_start"})
-            else:
-                game.state = 'waiting_join'
-                bot.send_message(room_id, f"⚔️ Multiplayer Mode!\nWaiting for player...\nType **'j'** to join @{game.p1_name}!")
-            return True
+            if command in ["1", "2"]:
+                game.bet = 0 if command == "1" else 100
+                game.last_interaction = time.time() # ✅ Valid Input
 
-        # --- SETUP: Join Multiplayer ---
+                # Deduct P1 Coins
+                if game.bet > 0:
+                    update_coins(game.p1_name, -game.bet)
+
+                if game.mode == 1:
+                    game.state = 'playing'
+                    img = draw_board(game.board)
+                    link = upload_image(bot, img)
+                    bot.send_message(room_id, f"🔥 Started (Vs Bot)\nBet: {game.bet}\nType **1-9** to play.")
+                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
+                else:
+                    game.state = 'waiting_join'
+                    bot.send_message(room_id, f"⚔️ Multiplayer (Bet: {game.bet})\nWaiting for player...\nType **'j'** to join!")
+                return True
+
+        # 3. JOINING
         elif game.state == 'waiting_join':
             if command == "j" and user != game.p1_name:
                 game.p2_name = user
-                game.p2_id = user # Save ID logic here if available
-                game.state = 'playing'
+                game.last_interaction = time.time() # ✅ Valid Input
                 
+                # Deduct P2 Coins
+                if game.bet > 0:
+                    update_coins(game.p2_name, -game.bet)
+
+                game.state = 'playing'
                 img = draw_board(game.board)
                 link = upload_image(bot, img)
-                bot.send_message(room_id, f"🥊 Match On!\n@{game.p1_name} (X) vs @{game.p2_name} (O)\n@{game.p1_name}, your turn!")
-                if link:
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_start"})
+                bot.send_message(room_id, f"🥊 Match On!\n@{game.p1_name} (X) vs @{game.p2_name} (O)\n@{game.p1_name} turn!")
+                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                 return True
 
-        # --- PLAYING STATE (Input 1-9) ---
+        # 4. PLAYING
         elif game.state == 'playing':
-            # Check if input is a valid number 1-9
             if command.isdigit() and 1 <= int(command) <= 9:
                 idx = int(command) - 1
                 
-                # Identify Player
-                current_player_symbol = game.turn
-                current_player_name = game.p1_name if game.turn == 'X' else game.p2_name
-                
-                # Check Turn
-                if user != current_player_name:
-                    return False # Not their turn
-                
-                # Check if cell empty
-                if game.board[idx] is not None:
-                    bot.send_message(room_id, f"🚫 Spot taken @{user}!")
+                # Turn Logic
+                current_player = game.p1_name if game.turn == 'X' else game.p2_name
+                if user != current_player: return False # Not your turn
+                if game.board[idx] is not None: 
+                    bot.send_message(room_id, "🚫 Taken!")
                     return True
+
+                # Move Executed
+                game.last_interaction = time.time() # ✅ Valid Input
+                game.board[idx] = game.turn
                 
-                # EXECUTE MOVE
-                game.board[idx] = current_player_symbol
-                
-                # Check Win/Draw
+                # Check Win
                 winner = game.check_win()
-                
                 if winner:
-                    # Game Over
+                    # Final Image
                     img = draw_board(game.board)
                     link = upload_image(bot, img)
-                    if link:
-                        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Final", "id": "gm_end"})
-                    
+                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "End", "id": "gm_e"})
+
                     if winner == 'draw':
-                        bot.send_message(room_id, "🤝 It's a DRAW!")
+                        bot.send_message(room_id, "🤝 Draw! Coins refunded.")
+                        if game.bet > 0:
+                            update_coins(game.p1_name, game.bet)
+                            if game.mode == 2: update_coins(game.p2_name, game.bet)
                     else:
-                        # Draw Winner Card
-                        card = draw_winner_card(user, winner)
-                        card_link = upload_image(bot, card)
-                        if card_link:
-                            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": card_link, "text": "Winner", "id": "gm_win"})
-                        bot.send_message(room_id, f"🎉 WINNER: @{user} wins {game.bet if game.bet > 0 else ''}!")
+                        win_user = game.p1_name if winner == 'X' else game.p2_name
+                        total_pot = game.bet * 2 if game.mode == 2 else game.bet * 2 # Simple doubling logic
                         
-                        # TODO: Update DB here if bet > 0
+                        # Generate Winner Card
+                        card = draw_winner_card(win_user, winner)
+                        clink = upload_image(bot, card)
+                        if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
                         
+                        bot.send_message(room_id, f"🎉 @{win_user} Won {total_pot} coins!")
+                        if game.bet > 0:
+                            update_coins(win_user, total_pot)
+
                     del games[room_id]
                     return True
-                
+
                 # Swap Turn
                 game.turn = 'O' if game.turn == 'X' else 'X'
-                next_player = game.p1_name if game.turn == 'X' else game.p2_name
                 
-                # IF SINGLE PLAYER & NEXT IS BOT
-                if game.mode == 1 and next_player == "Bot":
-                    # Bot moves immediately
+                # Bot Logic (If Single Player)
+                if game.mode == 1 and game.turn == 'O':
                     bot_idx = game.bot_move()
                     if bot_idx is not None:
                         game.board[bot_idx] = 'O'
-                        
-                        # Check Win for Bot
+                        # Check Bot Win
                         winner = game.check_win()
                         if winner:
                             img = draw_board(game.board)
                             link = upload_image(bot, img)
-                            if link:
-                                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Bot Wins", "id": "gm_botwin"})
-                            if winner == 'draw':
-                                bot.send_message(room_id, "Draw!")
-                            else:
-                                bot.send_message(room_id, "🤖 Bot Wins! Better luck next time.")
+                            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": "gm_be"})
+                            
+                            if winner == 'draw': bot.send_message(room_id, "Draw!")
+                            else: bot.send_message(room_id, "🤖 Bot Wins! You lost coins.")
                             del games[room_id]
                             return True
-                            
-                        # Swap back to Player
-                        game.turn = 'X'
-                
-                # Update Board Image for Next Turn
+                        
+                        game.turn = 'X' # Back to player
+
+                # Update Board Image
                 img = draw_board(game.board)
                 link = upload_image(bot, img)
-                if link:
-                    next_p = game.p1_name if game.turn == 'X' else game.p2_name
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {next_p}", "id": "gm_upd"})
-
+                next_p = game.p1_name if game.turn == 'X' else game.p2_name
+                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {next_p}", "id": "gm_u"})
                 return True
 
     return False
