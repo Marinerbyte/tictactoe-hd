@@ -1,128 +1,172 @@
-# ui.py
-from flask import Flask, request, jsonify, render_template_string
-import requests
+from flask import Blueprint, render_template_string, request, jsonify, redirect, url_for
 import os
 
-app = Flask(__name__)
+ui_bp = Blueprint('ui', __name__)
 
-BOT_API = os.environ.get("BOT_API_URL", "http://localhost:5000")
-
-# =========================================================
-# SINGLE UI PAGE
-# =========================================================
-HTML = """
+# Single HTML Template
+DASHBOARD_HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Bot Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Howdies Bot Control</title>
     <style>
-        body { font-family: Arial; background:#111; color:#eee; padding:20px }
-        h2 { margin-top:30px }
-        input, button { padding:6px; margin:5px }
-        button { cursor:pointer }
-        table { border-collapse: collapse; margin-top:10px }
-        td, th { border:1px solid #555; padding:6px }
+        body { font-family: sans-serif; background: #222; color: #fff; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: #333; padding: 15px; border-radius: 8px; }
+        h2 { margin-top: 0; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        input, button { padding: 8px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { cursor: pointer; background: #007bff; color: white; border: none; font-weight: bold; }
+        button.stop { background: #dc3545; }
+        button.action { background: #28a745; width: auto; }
+        #log-window { background: #000; height: 300px; overflow-y: scroll; font-family: monospace; padding: 10px; border: 1px solid #444; }
+        .status-dot { height: 10px; width: 10px; background-color: red; border-radius: 50%; display: inline-block; }
+        .active { background-color: #0f0; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #444; }
     </style>
 </head>
 <body>
 
-<h1>Bot Control Panel</h1>
+<h1>Howdies Bot Dashboard <span id="status" class="status-dot"></span></h1>
 
-<h2>Room Control</h2>
-<input id="room" placeholder="room name">
-<button onclick="startRoom()">Join Room</button>
-<button onclick="leaveRoom()">Leave Room</button>
-<pre id="roomResult"></pre>
+<div class="container">
+    
+    <!-- Controls -->
+    <div class="card">
+        <h2>Connection</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="loginAndStart()">Login & Start Bot</button>
+        <button class="stop" onclick="stopBot()">Stop Bot</button>
+        
+        <h3>Room Management</h3>
+        <input type="text" id="roomName" placeholder="Room Name">
+        <input type="text" id="roomPass" placeholder="Room Password (Optional)">
+        <button onclick="joinRoom()">Join Room</button>
+    </div>
 
-<h2>Plugin Control</h2>
-<input id="plugin" placeholder="plugin name">
-<button onclick="loadPlugin()">Load Plugin</button>
-<button onclick="unloadPlugin()">Unload Plugin</button>
-<pre id="pluginResult"></pre>
+    <!-- Stats & Plugins -->
+    <div class="card">
+        <h2>Plugins</h2>
+        <div id="plugin-list"></div>
+        <button class="action" onclick="reloadPlugins()">Reload Plugins</button>
 
-<h2>Leaderboard</h2>
-<button onclick="loadScores()">Refresh Scores</button>
-<table id="scores"></table>
+        <h2>Active Rooms</h2>
+        <ul id="room-list"></ul>
+    </div>
+
+    <!-- Logs -->
+    <div class="card" style="grid-column: 1 / -1;">
+        <h2>System Logs</h2>
+        <div id="log-window"></div>
+    </div>
+</div>
 
 <script>
-function startRoom(){
-    fetch("/api/start_room",{
-        method:"POST",
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({room:room.value})
-    }).then(r=>r.json()).then(d=>roomResult.innerText=JSON.stringify(d,null,2))
-}
+    async function api(endpoint, data={}) {
+        const response = await fetch('/api' + endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        return await response.json();
+    }
 
-function leaveRoom(){
-    fetch("/api/leave_room",{
-        method:"POST",
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({room:room.value})
-    }).then(r=>r.json()).then(d=>roomResult.innerText=JSON.stringify(d,null,2))
-}
+    async function loginAndStart() {
+        const u = document.getElementById('username').value;
+        const p = document.getElementById('password').value;
+        const res = await api('/start', {username: u, password: p});
+        alert(res.msg);
+    }
 
-function loadPlugin(){
-    fetch("/api/load_plugin",{
-        method:"POST",
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({plugin:plugin.value})
-    }).then(r=>r.json()).then(d=>pluginResult.innerText=JSON.stringify(d,null,2))
-}
+    async function stopBot() {
+        const res = await api('/stop');
+        alert(res.msg);
+    }
 
-function unloadPlugin(){
-    fetch("/api/unload_plugin",{
-        method:"POST",
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({plugin:plugin.value})
-    }).then(r=>r.json()).then(d=>pluginResult.innerText=JSON.stringify(d,null,2))
-}
+    async function joinRoom() {
+        const r = document.getElementById('roomName').value;
+        const p = document.getElementById('roomPass').value;
+        const res = await api('/join', {room: r, pass: p});
+        if(!res.success) alert(res.msg);
+    }
 
-function loadScores(){
-    fetch("/api/leaderboard")
-    .then(r=>r.json())
-    .then(d=>{
-        let html="<tr><th>User</th><th>Score</th></tr>";
-        d.users.forEach(u=>{
-            html+=`<tr><td>${u.username}</td><td>${u.score}</td></tr>`
-        })
-        scores.innerHTML=html
-    })
-}
+    async function reloadPlugins() {
+        const res = await api('/plugins/reload');
+        alert(res.msg);
+        updateStatus();
+    }
+
+    async function updateStatus() {
+        const res = await fetch('/api/status').then(r => r.json());
+        
+        // Update Dot
+        const dot = document.getElementById('status');
+        dot.classList.toggle('active', res.running);
+        
+        // Logs
+        const logWin = document.getElementById('log-window');
+        logWin.innerHTML = res.logs.join('<br>');
+        logWin.scrollTop = logWin.scrollHeight;
+
+        // Rooms
+        const roomList = document.getElementById('room-list');
+        roomList.innerHTML = res.rooms.map(r => `<li>${r}</li>`).join('');
+
+        // Plugins
+        const plugList = document.getElementById('plugin-list');
+        plugList.innerHTML = res.plugins.map(p => `<span>${p}</span>`).join(', ');
+    }
+
+    // Poll status
+    setInterval(updateStatus, 2000);
+    updateStatus();
 </script>
 
 </body>
 </html>
 """
 
-@app.route("/")
-def index():
-    return render_template_string(HTML)
+def register_routes(app, bot_instance):
+    
+    @app.route('/')
+    def index():
+        return render_template_string(DASHBOARD_HTML)
 
-# =========================================================
-# API BRIDGE → app.py
-# =========================================================
-@app.route("/api/start_room", methods=["POST"])
-def start_room():
-    return jsonify(requests.post(f"{BOT_API}/dashboard/start_room", json=request.json).json())
+    @app.route('/api/start', methods=['POST'])
+    def start_bot():
+        data = request.json
+        success, msg = bot_instance.login_api(data['username'], data['password'])
+        if success:
+            bot_instance.connect_ws()
+            bot_instance.plugins.load_plugins()
+        return jsonify({"success": success, "msg": msg})
 
-@app.route("/api/leave_room", methods=["POST"])
-def leave_room():
-    return jsonify(requests.post(f"{BOT_API}/dashboard/leave_room", json=request.json).json())
+    @app.route('/api/stop', methods=['POST'])
+    def stop_bot():
+        bot_instance.disconnect()
+        return jsonify({"success": True, "msg": "Bot stopping..."})
 
-@app.route("/api/load_plugin", methods=["POST"])
-def load_plugin():
-    return jsonify(requests.post(f"{BOT_API}/dashboard/load_plugin", json=request.json).json())
+    @app.route('/api/join', methods=['POST'])
+    def join_room():
+        data = request.json
+        if not bot_instance.running:
+            return jsonify({"success": False, "msg": "Bot not running"})
+        bot_instance.join_room(data['room'], data.get('pass', ''))
+        return jsonify({"success": True, "msg": "Join command sent"})
 
-@app.route("/api/unload_plugin", methods=["POST"])
-def unload_plugin():
-    return jsonify(requests.post(f"{BOT_API}/dashboard/unload_plugin", json=request.json).json())
+    @app.route('/api/plugins/reload', methods=['POST'])
+    def reload_plugins():
+        loaded = bot_instance.plugins.load_plugins()
+        return jsonify({"success": True, "msg": f"Reloaded: {loaded}"})
 
-@app.route("/api/leaderboard")
-def leaderboard():
-    return jsonify(requests.get(f"{BOT_API}/dashboard/leaderboard").json())
-
-# =========================================================
-# RUN
-# =========================================================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("UI_PORT", 8000)))
+    @app.route('/api/status', methods=['GET'])
+    def status():
+        return jsonify({
+            "running": bot_instance.running,
+            "logs": bot_instance.logs,
+            "rooms": bot_instance.active_rooms,
+            "plugins": list(bot_instance.plugins.plugins.keys())
+        })
