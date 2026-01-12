@@ -24,7 +24,7 @@ BOT_INSTANCE = None
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[TicTacToe] Setup Complete.")
+    print("[TicTacToe] Pro Bot Loaded.")
 
 # --- CLEANER THREAD ---
 def game_cleanup_loop():
@@ -61,7 +61,6 @@ def update_coins(user_id, amount):
     try:
         try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
         except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, user_id))
-        
         query = "UPDATE users SET global_score = global_score + %s WHERE user_id = %s"
         if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
         cur.execute(query, (amount, user_id))
@@ -76,7 +75,6 @@ def add_win(user_id):
     try:
         try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
         except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, user_id))
-        
         query = "UPDATE users SET wins = wins + 1 WHERE user_id = %s"
         if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET wins = wins + 1 WHERE user_id = ?"
         cur.execute(query, (user_id,))
@@ -185,24 +183,58 @@ class TicTacToe:
         self.bet = 0
         self.last_interaction = time.time()
     def touch(self): self.last_interaction = time.time()
-    def check_win(self):
+    
+    def check_win(self, board_check=None):
+        # Allow checking a hypothetical board
+        b = board_check if board_check else self.board
         wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
         for a, b, c in wins:
-            if self.board[a] and self.board[a] == self.board[b] == self.board[c]: return self.board[a]
-        if None not in self.board: return 'draw'
+            if b[a] and b[a] == b[b] == b[c]: return b[a]
+        if None not in b: return 'draw'
         return None
+    
+    # --- NEW: PRO BOT LOGIC (Smart Move) ---
     def bot_move(self):
         empty = [i for i, x in enumerate(self.board) if x is None]
-        return random.choice(empty) if empty else None
+        if not empty: return None
+        
+        bot_sym = 'O'
+        player_sym = 'X'
 
-# --- MAIN HANDLER (UPDATED FOR NEW ENGINE) ---
-# Note: Last argument is now 'data', not kwargs or avatar_url directly
+        # 1. Check if Bot can win NOW
+        for move in empty:
+            self.board[move] = bot_sym
+            if self.check_win() == bot_sym:
+                # Don't reset, just keep it? No, reset to let main logic handle update
+                self.board[move] = None 
+                return move
+            self.board[move] = None # Reset
+
+        # 2. Check if Player will win next (BLOCK HIM)
+        for move in empty:
+            self.board[move] = player_sym
+            if self.check_win() == player_sym:
+                self.board[move] = None
+                return move # BLOCK!
+            self.board[move] = None
+
+        # 3. Take Center if available (Best strategic move)
+        if 4 in empty: return 4
+
+        # 4. Take Corners (0, 2, 6, 8)
+        corners = [0, 2, 6, 8]
+        available_corners = [c for c in corners if c in empty]
+        if available_corners: return random.choice(available_corners)
+
+        # 5. Take whatever is left (Random)
+        return random.choice(empty)
+
+# --- MAIN HANDLER ---
 def handle_command(bot, command, room_id, user, args, data):
     try:
         global games, BOT_INSTANCE
         if BOT_INSTANCE is None: BOT_INSTANCE = bot
         
-        # --- NEW: Extract Avatar Manually from Data ---
         avatar_file = data.get("avatar")
         avatar_url = f"https://cdn.howdies.app/avatar?image={avatar_file}" if avatar_file else None
 
@@ -224,12 +256,9 @@ def handle_command(bot, command, room_id, user, args, data):
 
         if current_game:
             game = current_game
-            
-            # Avatar Sync
             if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
             if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
-            # 1. SETUP
             if game.state == 'setup_mode' and user == game.p1_name:
                 if cmd_clean == "1":
                     game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
@@ -240,7 +269,6 @@ def handle_command(bot, command, room_id, user, args, data):
                     bot.send_message(room_id, "💰 Bet Amount?\n1️⃣ Fun (No Reward)\n2️⃣ Bet 100 Coins")
                     return True
             
-            # 2. BET
             elif game.state == 'setup_bet' and user == game.p1_name:
                 if cmd_clean in ["1", "2"]:
                     game.bet = 0 if cmd_clean == "1" else 100; game.touch()
@@ -250,19 +278,16 @@ def handle_command(bot, command, room_id, user, args, data):
                         game.state = 'playing'
                         img = draw_board(game.board)
                         link = upload_image(bot, img, room_id)
-                        bot.send_message(room_id, f"🔥 vs Bot\nType **1-9**")
+                        bot.send_message(room_id, f"🔥 vs Pro Bot 🤖\nType **1-9**")
                         if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                     else:
                         game.state = 'waiting_join'
                         bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
                     return True
             
-            # 3. JOIN
             elif game.state == 'waiting_join':
                 if cmd_clean in ["j", "join"]:
-                    if user == game.p1_name:
-                        bot.send_message(room_id, "⚠️ Wait for opponent!")
-                        return True
+                    if user == game.p1_name: return True
                     game.p2_name = user; game.p2_avatar = avatar_url; game.touch()
                     if game.bet > 0: update_coins(game.p2_name, -game.bet)
                     game.state = 'playing'
@@ -272,7 +297,6 @@ def handle_command(bot, command, room_id, user, args, data):
                     if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                     return True
             
-            # 4. PLAYING
             elif game.state == 'playing':
                 if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
                     idx = int(cmd_clean) - 1
@@ -289,7 +313,6 @@ def handle_command(bot, command, room_id, user, args, data):
                     if win:
                         w_user = game.p1_name if win=='X' else game.p2_name
                         w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
-                        
                         if win == 'draw':
                             bot.send_message(room_id, "🤝 Draw!")
                             if game.bet > 0:
@@ -301,20 +324,15 @@ def handle_command(bot, command, room_id, user, args, data):
                             if game.mode == 1:
                                 total = 500 if game.bet == 0 else 700
                                 update_coins(w_user, total)
-                                reward_msg = f"🎉 @{w_user} Won {total} coins!"
+                                reward_msg = f"🎉 @{w_user} beat the Pro Bot! ({total} coins)"
                             else:
                                 pot = game.bet * 2
-                                if pot > 0:
-                                    update_coins(w_user, pot)
-                                    reward_msg = f"🎉 @{w_user} Won {pot} coins!"
-                                else:
-                                    reward_msg = f"🎉 @{w_user} Won! (No Bet)"
-
+                                if pot > 0: update_coins(w_user, pot); reward_msg = f"🎉 @{w_user} Won {pot} coins!"
+                                else: reward_msg = f"🎉 @{w_user} Won!"
                             card = draw_winner_card(w_user, win, w_avatar)
                             clink = upload_image(bot, card, room_id)
                             if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
                             bot.send_message(room_id, reward_msg)
-                        
                         with games_lock: del games[room_id]
                         return True
 
@@ -328,11 +346,10 @@ def handle_command(bot, command, room_id, user, args, data):
                                 img = draw_board(game.board)
                                 link = upload_image(bot, img, room_id)
                                 if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": "gm_be"})
-                                bot.send_message(room_id, "🤖 Bot Wins!")
+                                bot.send_message(room_id, "🤖 Pro Bot Wins!")
                                 with games_lock: del games[room_id]
                                 return True
                             game.turn = 'X'
-                    
                     img = draw_board(game.board)
                     link = upload_image(bot, img, room_id)
                     nxt = game.p1_name if game.turn=='X' else game.p2_name
