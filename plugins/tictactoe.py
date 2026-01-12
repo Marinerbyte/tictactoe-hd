@@ -55,16 +55,33 @@ def get_font(size):
     return ImageFont.load_default()
 
 def update_coins(user_id, amount):
+    """Coins update karta hai"""
     conn = db.get_connection()
     if not conn: return
     cur = conn.cursor()
     try:
-        try: cur.execute("INSERT INTO users (user_id, username, global_score) VALUES (%s, %s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
-        except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score) VALUES (?, ?, 0)", (user_id, user_id))
+        try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
+        except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, user_id))
         
         query = "UPDATE users SET global_score = global_score + %s WHERE user_id = %s"
         if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
         cur.execute(query, (amount, user_id))
+        conn.commit()
+    except: pass
+    finally: conn.close()
+
+def add_win(user_id):
+    """Wins counter badhata hai (+1)"""
+    conn = db.get_connection()
+    if not conn: return
+    cur = conn.cursor()
+    try:
+        try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
+        except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, user_id))
+        
+        query = "UPDATE users SET wins = wins + 1 WHERE user_id = %s"
+        if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET wins = wins + 1 WHERE user_id = ?"
+        cur.execute(query, (user_id,))
         conn.commit()
     except: pass
     finally: conn.close()
@@ -207,15 +224,17 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
             if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
             if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
-            # 1. SETUP
+            # 1. SETUP - MODE SELECTION
             if game.state == 'setup_mode' and user == game.p1_name:
                 if cmd_clean == "1":
                     game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
-                    bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
+                    # Updated Text for Single Player
+                    bot.send_message(room_id, "💰 Reward Mode?\n1️⃣ Free Play (Win 500)\n2️⃣ Bet 100 (Win 700)")
                     return True
                 elif cmd_clean == "2":
                     game.mode = 2; game.state = 'setup_bet'; game.touch()
-                    bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
+                    # Updated Text for Multi Player
+                    bot.send_message(room_id, "💰 Bet Amount?\n1️⃣ Fun (No Reward)\n2️⃣ Bet 100 Coins")
                     return True
             
             # 2. BET
@@ -223,6 +242,7 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                 if cmd_clean in ["1", "2"]:
                     game.bet = 0 if cmd_clean == "1" else 100; game.touch()
                     if game.bet > 0: update_coins(game.p1_name, -game.bet)
+                    
                     if game.mode == 1:
                         game.state = 'playing'
                         img = draw_board(game.board)
@@ -267,25 +287,34 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                         w_user = game.p1_name if win=='X' else game.p2_name
                         w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
                         
+                        # --- WIN LOGIC ---
                         if win == 'draw':
                             bot.send_message(room_id, "🤝 Draw!")
                             if game.bet > 0:
                                 update_coins(game.p1_name, game.bet)
                                 if game.mode==2: update_coins(game.p2_name, game.bet)
                         else:
-                            # --- WINNER REWARD LOGIC ---
+                            # 1. Add Win to DB
+                            add_win(w_user)
+
+                            # 2. Calculate Reward
                             reward_msg = ""
                             if game.mode == 1:
-                                # Single Player Reward (500 Coins)
-                                update_coins(w_user, 500)
-                                reward_msg = f"🎉 @{w_user} beat the Bot! Won 500 coins!"
+                                # Single Player Reward
+                                total = 500
+                                if game.bet > 0: total = 700 # 500 Bonus + 200 Winnings
+                                update_coins(w_user, total)
+                                reward_msg = f"🎉 @{w_user} Won {total} coins!"
                             else:
-                                # Multiplayer Reward (Pot)
+                                # Multiplayer Reward
                                 pot = game.bet * 2
-                                if game.bet > 0: update_coins(w_user, pot)
-                                reward_msg = f"🎉 @{w_user} Won {pot} coins!"
+                                if pot > 0:
+                                    update_coins(w_user, pot)
+                                    reward_msg = f"🎉 @{w_user} Won {pot} coins!"
+                                else:
+                                    reward_msg = f"🎉 @{w_user} Won! (No Bet)"
 
-                            # Draw Card
+                            # 3. Draw Card & Send
                             card = draw_winner_card(w_user, win, w_avatar)
                             clink = upload_image(bot, card, room_id)
                             if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
