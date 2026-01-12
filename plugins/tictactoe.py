@@ -5,44 +5,42 @@ import io
 import sys
 import os
 import threading
+import traceback
 from PIL import Image, ImageDraw, ImageFont
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import db
+# Import DB safely
+try:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    import db
+except Exception as e:
+    print(f"DB Import Error: {e}")
 
 # --- GLOBAL STATE ---
 games = {} 
-games_lock = threading.Lock() # Thread Safety ke liye
+games_lock = threading.Lock()
 
-# --- SELF-CLEANER THREAD (Yeh game ko khud band karega) ---
+# --- CLEANER THREAD ---
 def game_cleanup_loop():
     while True:
-        time.sleep(10) # Har 10 second mein check karo
+        time.sleep(10)
         now = time.time()
         to_remove = []
-
         with games_lock:
             for room_id, game in games.items():
-                # 90 Seconds Timeout
                 if now - game.last_interaction > 90:
                     to_remove.append(room_id)
-        
-        # Remove expired games
         for room_id in to_remove:
             with games_lock:
                 if room_id in games:
-                    game = games[room_id]
-                    # Hum bot object pass nahi kar sakte yahan easily bina refactor kiye
-                    # Isliye sirf memory se hata denge.
-                    # Next time jab user kuch likhega tab pata chalega game nahi hai.
                     del games[room_id]
-                    print(f"[Auto-Clean] Game in {room_id} removed due to inactivity.")
+                    print(f"Game in {room_id} timed out.")
 
-# Start Cleaner Thread automatically when plugin loads
-cleaner_thread = threading.Thread(target=game_cleanup_loop, daemon=True)
-cleaner_thread.start()
+# Start Cleaner (Check if already running to avoid duplicates on reload)
+# Note: Simple threading check implies one cleaner per process, valid for this scope.
+if threading.active_count() < 5: # Crude check, mostly safe for this bot scale
+    threading.Thread(target=game_cleanup_loop, daemon=True).start()
 
-# --- Helper Functions (Fonts, DB, Upload) ---
+# --- HELPER FUNCTIONS ---
 def get_font(size):
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -83,7 +81,13 @@ def upload_image(bot, image, room_id):
         data = {'token': bot.token, 'uploadType': 'image', 'UserID': uid}
         r = requests.post(url, files=files, data=data)
         res = r.json()
-        return res.get('url') or res.get('data', {}).get('url')
+        link = res.get('url') or res.get('data', {}).get('url')
+        
+        # Debugging: Agar link nahi mila to console me print karo
+        if not link:
+            print(f"[Upload Error] Response: {r.text}")
+            
+        return link
     except Exception as e:
         print(f"Upload Fail: {e}")
         return None
@@ -165,7 +169,6 @@ def draw_board(board_state):
             d.ellipse([(x+offset, y+offset), (x+cell-offset, y+cell-offset)], outline=(50, 150, 255), width=15)
     return img
 
-# --- Game Logic ---
 class TicTacToe:
     def __init__(self, room_id, creator_id, creator_avatar=None):
         self.room_id = room_id
@@ -178,10 +181,9 @@ class TicTacToe:
         self.state = 'setup_mode'
         self.mode = None
         self.bet = 0
-        self.last_interaction = time.time() # Timer Track karne ke liye
+        self.last_interaction = time.time()
     
     def touch(self):
-        """Valid Move par timer reset karo"""
         self.last_interaction = time.time()
 
     def check_win(self):
@@ -195,144 +197,145 @@ class TicTacToe:
         empty = [i for i, x in enumerate(self.board) if x is None]
         return random.choice(empty) if empty else None
 
-# --- Main Handler ---
+# --- MAIN COMMAND HANDLER ---
 def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs):
-    global games
-    
-    # 1. Check if Game exists
-    with games_lock:
-        current_game = games.get(room_id)
-    
-    # Clean Inputs
-    cmd_clean = command.lower().strip()
+    try:
+        global games
+        
+        with games_lock:
+            current_game = games.get(room_id)
+        
+        # FIX: "!" Hataya kyunki bot_engine already hata deta hai
+        cmd_clean = command.lower().strip()
 
-    # --- Start New Game ---
-    if cmd_clean == "!tic":
-        if current_game:
-            bot.send_message(room_id, "⚠️ Game chal raha hai!")
+        # --- COMMANDS ---
+        if cmd_clean == "tic":  # <-- Changed from "!tic" to "tic"
+            if current_game:
+                bot.send_message(room_id, "⚠️ Game chal raha hai!")
+                return True
+            with games_lock:
+                games[room_id] = TicTacToe(room_id, user, avatar_url)
+            bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose:\n1️⃣ Single\n2️⃣ Multi")
             return True
-        with games_lock:
-            games[room_id] = TicTacToe(room_id, user, avatar_url)
-        bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose:\n1️⃣ Single\n2️⃣ Multi")
-        return True
 
-    # --- Stop Game ---
-    if cmd_clean == "!stop" and current_game:
-        with games_lock:
-            del games[room_id]
-        bot.send_message(room_id, "🛑 Game Stopped.")
-        return True
+        if cmd_clean == "stop" and current_game: # <-- Changed from "!stop" to "stop"
+            with games_lock:
+                del games[room_id]
+            bot.send_message(room_id, "🛑 Game Stopped.")
+            return True
 
-    # --- Game Logic ---
-    if current_game:
-        game = current_game
-        
-        # Avatar Update (Late Capture)
-        if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
-        if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
+        # --- GAMEPLAY ---
+        if current_game:
+            game = current_game
+            
+            # Late Avatar Update
+            if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
+            if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
-        # State 1: Choose Mode
-        if game.state == 'setup_mode' and user == game.p1_name:
-            if cmd_clean == "1":
-                game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
-                bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
-                return True
-            elif cmd_clean == "2":
-                game.mode = 2; game.state = 'setup_bet'; game.touch()
-                bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
-                return True
-        
-        # State 2: Choose Bet
-        elif game.state == 'setup_bet' and user == game.p1_name:
-            if cmd_clean in ["1", "2"]:
-                game.bet = 0 if cmd_clean == "1" else 100; game.touch()
-                if game.bet > 0: update_coins(game.p1_name, -game.bet)
-                
-                if game.mode == 1:
+            # 1. SETUP MODE
+            if game.state == 'setup_mode' and user == game.p1_name:
+                if cmd_clean == "1":
+                    game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
+                    bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
+                    return True
+                elif cmd_clean == "2":
+                    game.mode = 2; game.state = 'setup_bet'; game.touch()
+                    bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
+                    return True
+            
+            # 2. BET
+            elif game.state == 'setup_bet' and user == game.p1_name:
+                if cmd_clean in ["1", "2"]:
+                    game.bet = 0 if cmd_clean == "1" else 100; game.touch()
+                    if game.bet > 0: update_coins(game.p1_name, -game.bet)
+                    
+                    if game.mode == 1:
+                        game.state = 'playing'
+                        img = draw_board(game.board)
+                        link = upload_image(bot, img, room_id)
+                        bot.send_message(room_id, f"🔥 Started vs Bot\nType **1-9**")
+                        if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
+                    else:
+                        game.state = 'waiting_join'
+                        bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
+                    return True
+            
+            # 3. JOIN
+            elif game.state == 'waiting_join':
+                if cmd_clean == "j" and user != game.p1_name:
+                    game.p2_name = user
+                    game.p2_avatar = avatar_url
+                    game.touch()
+                    if game.bet > 0: update_coins(game.p2_name, -game.bet)
+                    
                     game.state = 'playing'
                     img = draw_board(game.board)
                     link = upload_image(bot, img, room_id)
-                    bot.send_message(room_id, f"🔥 Started vs Bot\nType **1-9**")
+                    bot.send_message(room_id, f"🥊 @{game.p1_name} vs @{game.p2_name}\n@{game.p1_name} turn!")
                     if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
-                else:
-                    game.state = 'waiting_join'
-                    bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
-                return True
-        
-        # State 3: Multiplayer Join (FIXED)
-        elif game.state == 'waiting_join':
-            # Check: User "j" likhe aur wo Player 1 na ho
-            if cmd_clean == "j" and user != game.p1_name:
-                game.p2_name = user
-                game.p2_avatar = avatar_url
-                game.touch() # Timer Reset
-                
-                if game.bet > 0: update_coins(game.p2_name, -game.bet)
-                
-                game.state = 'playing'
-                img = draw_board(game.board)
-                link = upload_image(bot, img, room_id)
-                bot.send_message(room_id, f"🥊 @{game.p1_name} vs @{game.p2_name}\n@{game.p1_name} turn!")
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
-                return True
-        
-        # State 4: Playing (1-9)
-        elif game.state == 'playing':
-            if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
-                idx = int(cmd_clean) - 1
-                curr_p = game.p1_name if game.turn == 'X' else game.p2_name
-                
-                if user != curr_p: return False # Not your turn, ignore silently
-                if game.board[idx]: 
-                    bot.send_message(room_id, "🚫 Taken!")
                     return True
-                
-                game.touch() # Valid Move -> Timer Reset
-                game.board[idx] = game.turn
-                win = game.check_win()
-                
-                if win:
-                    w_user = game.p1_name if win=='X' else game.p2_name
-                    w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
+            
+            # 4. PLAY
+            elif game.state == 'playing':
+                if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
+                    idx = int(cmd_clean) - 1
+                    curr_p = game.p1_name if game.turn == 'X' else game.p2_name
                     
-                    if win == 'draw':
-                        bot.send_message(room_id, "🤝 Draw!")
-                        if game.bet > 0:
-                            update_coins(game.p1_name, game.bet)
-                            if game.mode==2: update_coins(game.p2_name, game.bet)
-                    else:
-                        pot = game.bet * 2
-                        card = draw_winner_card(w_user, win, w_avatar)
-                        clink = upload_image(bot, card, room_id)
-                        if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
-                        bot.send_message(room_id, f"🎉 @{w_user} Won {pot} coins!")
-                        if game.bet > 0: update_coins(w_user, pot)
+                    if user != curr_p: return False
+                    if game.board[idx]: 
+                        bot.send_message(room_id, "🚫 Taken!")
+                        return True
                     
-                    with games_lock: del games[room_id]
+                    game.touch()
+                    game.board[idx] = game.turn
+                    win = game.check_win()
+                    
+                    if win:
+                        w_user = game.p1_name if win=='X' else game.p2_name
+                        w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
+                        
+                        if win == 'draw':
+                            bot.send_message(room_id, "🤝 Draw!")
+                            if game.bet > 0:
+                                update_coins(game.p1_name, game.bet)
+                                if game.mode==2: update_coins(game.p2_name, game.bet)
+                        else:
+                            pot = game.bet * 2
+                            card = draw_winner_card(w_user, win, w_avatar)
+                            clink = upload_image(bot, card, room_id)
+                            if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
+                            bot.send_message(room_id, f"🎉 @{w_user} Won {pot} coins!")
+                            if game.bet > 0: update_coins(w_user, pot)
+                        
+                        with games_lock: del games[room_id]
+                        return True
+
+                    game.turn = 'O' if game.turn == 'X' else 'X'
+                    
+                    if game.mode == 1 and game.turn == 'O':
+                        b_idx = game.bot_move()
+                        if b_idx is not None:
+                            game.board[b_idx] = 'O'
+                            win = game.check_win()
+                            if win:
+                                img = draw_board(game.board)
+                                link = upload_image(bot, img, room_id)
+                                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": "gm_be"})
+                                bot.send_message(room_id, "🤖 Bot Wins!")
+                                with games_lock: del games[room_id]
+                                return True
+                            game.turn = 'X'
+                    
+                    img = draw_board(game.board)
+                    link = upload_image(bot, img, room_id)
+                    nxt = game.p1_name if game.turn=='X' else game.p2_name
+                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {nxt}", "id": "gm_u"})
                     return True
 
-                # Switch Turn
-                game.turn = 'O' if game.turn == 'X' else 'X'
-                
-                # Bot Move
-                if game.mode == 1 and game.turn == 'O':
-                    b_idx = game.bot_move()
-                    if b_idx is not None:
-                        game.board[b_idx] = 'O'
-                        win = game.check_win()
-                        if win:
-                            img = draw_board(game.board)
-                            link = upload_image(bot, img, room_id)
-                            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": "gm_be"})
-                            bot.send_message(room_id, "🤖 Bot Wins!")
-                            with games_lock: del games[room_id]
-                            return True
-                        game.turn = 'X'
-                
-                img = draw_board(game.board)
-                link = upload_image(bot, img, room_id)
-                nxt = game.p1_name if game.turn=='X' else game.p2_name
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {nxt}", "id": "gm_u"})
-                return True
-
-    return False
+        return False
+        
+    except Exception as e:
+        # Debugging: Chat me error bhejo taaki pata chale kyu nahi chal raha
+        bot.send_message(room_id, f"⚠️ Plugin Error: {str(e)}")
+        traceback.print_exc()
+        return False
