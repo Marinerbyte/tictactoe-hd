@@ -18,27 +18,46 @@ except Exception as e:
 # --- GLOBAL STATE ---
 games = {} 
 games_lock = threading.Lock()
+BOT_INSTANCE = None # Background thread ke liye Bot ka reference
 
-# --- CLEANER THREAD ---
+# --- SETUP FUNCTION (Called automatically by Plugin Loader) ---
+def setup(bot_ref):
+    global BOT_INSTANCE
+    BOT_INSTANCE = bot_ref
+    print("[TicTacToe] Plugin Setup Complete & Background Cleaner Ready.")
+
+# --- CLEANER THREAD (Auto-Close & Notify) ---
 def game_cleanup_loop():
     while True:
-        time.sleep(10)
+        time.sleep(10) # Check every 10 seconds
         now = time.time()
         to_remove = []
+        
+        # 1. Identify Expired Games
         with games_lock:
             for room_id, game in games.items():
-                if now - game.last_interaction > 90:
+                if now - game.last_interaction > 90: # 90 Seconds Limit
                     to_remove.append(room_id)
+        
+        # 2. Notify & Delete
         for room_id in to_remove:
+            # Send Notification if Bot is connected
+            if BOT_INSTANCE:
+                try:
+                    BOT_INSTANCE.send_message(room_id, "⌛ Game closed due to inactivity (90s timeout).")
+                except:
+                    pass # Connection error ho to ignore karo
+            
+            # Delete from Memory
             with games_lock:
                 if room_id in games:
                     del games[room_id]
-                    print(f"Game in {room_id} timed out.")
+                    print(f"[Auto-Clean] Closed game in {room_id}")
 
-# Start Cleaner (Check if already running to avoid duplicates on reload)
-# Note: Simple threading check implies one cleaner per process, valid for this scope.
-if threading.active_count() < 5: # Crude check, mostly safe for this bot scale
-    threading.Thread(target=game_cleanup_loop, daemon=True).start()
+# Start Cleaner Thread (Daemon runs in background)
+if threading.active_count() < 10: 
+    t = threading.Thread(target=game_cleanup_loop, daemon=True)
+    t.start()
 
 # --- HELPER FUNCTIONS ---
 def get_font(size):
@@ -82,11 +101,7 @@ def upload_image(bot, image, room_id):
         r = requests.post(url, files=files, data=data)
         res = r.json()
         link = res.get('url') or res.get('data', {}).get('url')
-        
-        # Debugging: Agar link nahi mila to console me print karo
-        if not link:
-            print(f"[Upload Error] Response: {r.text}")
-            
+        if not link: print(f"[Upload Error] {r.text}")
         return link
     except Exception as e:
         print(f"Upload Fail: {e}")
@@ -197,42 +212,43 @@ class TicTacToe:
         empty = [i for i, x in enumerate(self.board) if x is None]
         return random.choice(empty) if empty else None
 
-# --- MAIN COMMAND HANDLER ---
+# --- MAIN HANDLER ---
 def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs):
     try:
-        global games
+        global games, BOT_INSTANCE
+        # Update Global Bot Reference
+        if BOT_INSTANCE is None: BOT_INSTANCE = bot
         
         with games_lock:
             current_game = games.get(room_id)
         
-        # FIX: "!" Hataya kyunki bot_engine already hata deta hai
         cmd_clean = command.lower().strip()
 
-        # --- COMMANDS ---
-        if cmd_clean == "tic":  # <-- Changed from "!tic" to "tic"
+        # START
+        if cmd_clean == "tic":
             if current_game:
-                bot.send_message(room_id, "⚠️ Game chal raha hai!")
+                bot.send_message(room_id, "⚠️ Game running! Type 'stop'.")
                 return True
             with games_lock:
                 games[room_id] = TicTacToe(room_id, user, avatar_url)
             bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose:\n1️⃣ Single\n2️⃣ Multi")
             return True
 
-        if cmd_clean == "stop" and current_game: # <-- Changed from "!stop" to "stop"
-            with games_lock:
-                del games[room_id]
+        # STOP
+        if cmd_clean == "stop" and current_game:
+            with games_lock: del games[room_id]
             bot.send_message(room_id, "🛑 Game Stopped.")
             return True
 
-        # --- GAMEPLAY ---
+        # GAMEPLAY
         if current_game:
             game = current_game
             
-            # Late Avatar Update
+            # Avatar Sync
             if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
             if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
-            # 1. SETUP MODE
+            # 1. SETUP
             if game.state == 'setup_mode' and user == game.p1_name:
                 if cmd_clean == "1":
                     game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
@@ -253,16 +269,21 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                         game.state = 'playing'
                         img = draw_board(game.board)
                         link = upload_image(bot, img, room_id)
-                        bot.send_message(room_id, f"🔥 Started vs Bot\nType **1-9**")
+                        bot.send_message(room_id, f"🔥 vs Bot\nType **1-9**")
                         if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                     else:
                         game.state = 'waiting_join'
                         bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
                     return True
             
-            # 3. JOIN
+            # 3. JOIN (FIXED LOGIC)
             elif game.state == 'waiting_join':
-                if cmd_clean == "j" and user != game.p1_name:
+                # Check for 'j' or 'join'
+                if cmd_clean in ["j", "join"]:
+                    if user == game.p1_name:
+                        bot.send_message(room_id, "⚠️ You created the game, wait for opponent!")
+                        return True
+                        
                     game.p2_name = user
                     game.p2_avatar = avatar_url
                     game.touch()
@@ -275,7 +296,7 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                     if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                     return True
             
-            # 4. PLAY
+            # 4. MOVES
             elif game.state == 'playing':
                 if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
                     idx = int(cmd_clean) - 1
@@ -335,7 +356,6 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
         return False
         
     except Exception as e:
-        # Debugging: Chat me error bhejo taaki pata chale kyu nahi chal raha
-        bot.send_message(room_id, f"⚠️ Plugin Error: {str(e)}")
+        bot.send_message(room_id, f"⚠️ Error: {str(e)}")
         traceback.print_exc()
         return False
