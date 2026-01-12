@@ -1,303 +1,241 @@
-import time
-import random
-import requests
+# file: games/tic_tac_toe_polish.py
+
 import io
-import sys
-import os
+import random
+import time
+import threading
 from PIL import Image, ImageDraw, ImageFont
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import db
+TRIGGER = "!tic"
 
-games = {} 
+# --- Helper Functions ---
 
-# --- Helper: Fonts ---
-def get_font(size):
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "arial.ttf"
+def create_base_assets():
+    assets = {}
+    size = 200
+    # X
+    img_x = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img_x)
+    draw.line((40, 40, 160, 160), fill="red", width=20)
+    draw.line((160, 40, 40, 160), fill="red", width=20)
+    assets['X'] = img_x
+    # O
+    img_o = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img_o)
+    draw.ellipse((40, 40, 160, 160), outline="blue", width=20)
+    assets['O'] = img_o
+    # Numbers 1-9
+    font = ImageFont.load_default()
+    for i in range(1, 10):
+        img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+        d = ImageDraw.Draw(img)
+        text = str(i)
+        w, h = d.textsize(text, font=font)
+        d.text(((size-w)/2, (size-h)/2), text, fill="gray", font=font)
+        assets[str(i)] = img
+    return assets
+
+def generate_board_image(board):
+    width, height = 600, 600
+    img = Image.new('RGB', (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    for i in [200, 400]:
+        draw.line((i,0,i,600), fill="black", width=10)
+        draw.line((0,i,600,i), fill="black", width=10)
+    assets = create_base_assets()
+    for idx, cell in enumerate(board):
+        row, col = idx//3, idx%3
+        x, y = col*200, row*200
+        if cell in ['X','O']:
+            img.paste(assets[cell], (x,y), assets[cell])
+        else:
+            img.paste(assets[str(idx+1)], (x,y), assets[str(idx+1)])
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    return buf
+
+def check_winner(board):
+    wins = [
+        (0,1,2),(3,4,5),(6,7,8),
+        (0,3,6),(1,4,7),(2,5,8),
+        (0,4,8),(2,4,6)
     ]
-    for path in font_paths:
-        try:
-            return ImageFont.truetype(path, size)
-        except: continue
-    return ImageFont.load_default()
-
-# --- Helper: DB ---
-def update_coins(user_id, amount):
-    conn = db.get_connection()
-    if not conn: return
-    cur = conn.cursor()
-    try:
-        try:
-            cur.execute("INSERT INTO users (user_id, username, global_score) VALUES (%s, %s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
-        except:
-            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score) VALUES (?, ?, 0)", (user_id, user_id))
-        
-        query = "UPDATE users SET global_score = global_score + %s WHERE user_id = %s"
-        if not db.DATABASE_URL.startswith("postgres"):
-            query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
-        cur.execute(query, (amount, user_id))
-        conn.commit()
-    except: pass
-    finally: conn.close()
-
-# --- Helper: Upload ---
-def upload_image(bot, image, room_id):
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format='PNG')
-    img_byte_arr.seek(0)
-    url = "https://api.howdies.app/api/upload"
-    try:
-        uid = bot.user_id if bot.user_id else 0
-        files = {'file': ('tic.png', img_byte_arr, 'image/png')}
-        data = {'token': bot.token, 'uploadType': 'image', 'UserID': uid}
-        r = requests.post(url, files=files, data=data)
-        res = r.json()
-        return res.get('url') or res.get('data', {}).get('url')
-    except Exception as e:
-        print(f"Upload Fail: {e}")
-        return None
-
-# --- NEW: Download & Process Avatar ---
-def get_avatar_img(url):
-    try:
-        if not url: return None
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            img = Image.open(io.BytesIO(res.content)).convert("RGBA")
-            # Resize
-            img = img.resize((120, 120))
-            
-            # Make Circle
-            mask = Image.new('L', (120, 120), 0)
-            draw = ImageDraw.Draw(mask)
-            draw.ellipse((0, 0, 120, 120), fill=255)
-            
-            output = Image.new('RGBA', (120, 120), (0,0,0,0))
-            output.paste(img, (0,0), mask)
-            return output
-    except Exception as e:
-        print(f"Avatar Fetch Error: {e}")
+    for a,b,c in wins:
+        if board[a]==board[b]==board[c] and board[a]!=' ':
+            return board[a]
+    if ' ' not in board:
+        return 'Draw'
     return None
 
-# --- Draw Winner Card (With Real DP) ---
-def draw_winner_card(username, winner_symbol, avatar_url=None):
-    W, H = 400, 400
-    bg = (25, 10, 10) if winner_symbol == 'X' else (10, 10, 25)
-    img = Image.new('RGB', (W, H), color=bg)
-    d = ImageDraw.Draw(img)
-    
-    col = (255, 60, 60) if winner_symbol == 'X' else (60, 100, 255)
-    d.rectangle([(10, 10), (W-10, H-10)], outline=col, width=6)
+# --- Timeout Thread ---
 
-    # 1. Try Real Avatar
-    real_avatar = get_avatar_img(avatar_url)
-    cx, cy = W//2, 130
-    
-    if real_avatar:
-        # Paste Real Avatar (Centered)
-        img.paste(real_avatar, (cx - 60, cy - 60), real_avatar)
-        d.ellipse([(cx-60, cy-60), (cx+60, cy+60)], outline="white", width=4)
-    else:
-        # Fallback: Initials
-        rad = 60
-        d.ellipse([(cx-rad, cy-rad), (cx+rad, cy+rad)], fill=(60, 60, 60), outline="white", width=4)
-        initial = username[0].upper()
-        fnt_av = get_font(70)
-        bbox = d.textbbox((0, 0), initial, font=fnt_av)
-        d.text((cx - (bbox[2]-bbox[0])/2, cy - (bbox[3]-bbox[1])/1.2), initial, fill="white", font=fnt_av)
+def start_timeout_thread(game, send_text, economy_api):
+    def check_timeout():
+        while game['active']:
+            if game['started_at'] and time.time()-game['started_at']>90:
+                players_list = [v for v in game['players'].values() if v]
+                send_text(f"⏰ Game Timeout! Tic Tac Toe between {', '.join(players_list)} ended.")
+                if game['bet']>0:
+                    for p in players_list:
+                        if p != 'BOT':
+                            economy_api.add_currency(p, game['bet'])
+                game['active'] = False
+                break
+            time.sleep(5)
+    t = threading.Thread(target=check_timeout)
+    t.daemon = True
+    t.start()
 
-    # Text Info
-    fnt_name = get_font(45)
-    bbox = d.textbbox((0, 0), f"@{username}", font=fnt_name)
-    d.text(((W - (bbox[2]-bbox[0]))/2, 220), f"@{username}", fill="white", font=fnt_name)
+# --- Main Handler ---
 
-    fnt_title = get_font(30)
-    bbox = d.textbbox((0, 0), "🏆 WINNER 🏆", font=fnt_title)
-    d.text(((W - (bbox[2]-bbox[0]))/2, 290), "🏆 WINNER 🏆", fill="yellow", font=fnt_title)
-    
-    sym = "❌" if winner_symbol == 'X' else "⭕"
-    d.text((W//2 - 15, 340), sym, fill="white", font=get_font(30))
+def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, media_api, add_log):
+    if 'tic_game' not in state:
+        state['tic_game'] = {
+            'active': False,
+            'step':0,
+            'players':{},
+            'turn':'X',
+            'board':[' ']*9,
+            'bet':0,
+            'mode':1,
+            'started_at': None
+        }
 
-    return img
+    game = state['tic_game']
+    clean_msg = msg.strip()
 
-def draw_board(board_state):
-    size = 400
-    cell = size // 3
-    img = Image.new('RGB', (size, size), color=(20, 20, 25)) 
-    d = ImageDraw.Draw(img)
-    fnt_num = get_font(60)
+    # --- START GAME ---
+    if clean_msg.lower().startswith("!tic"):
+        if game['active']:
+            send_text("⚠️ Game already running! Wait or play your move.")
+            return
+        game['board']=[' ']*9
+        game['turn']='X'
+        game['players']={'X':user,'O':None}
+        game['active']=True
+        game['step']=1
+        game['started_at']=time.time()
+        send_text("🎮 Tic Tac Toe 🎮\nSelect Mode:\n1️⃣ Single Player\n2️⃣ Multiplayer")
+        start_timeout_thread(game, send_text, economy_api)
+        return
 
-    for i in range(1, 3):
-        d.line([(cell * i, 15), (cell * i, size - 15)], fill=(100, 100, 100), width=4)
-        d.line([(15, cell * i), (size - 15, cell * i)], fill=(100, 100, 100), width=4)
+    # --- MODE SELECTION ---
+    if game['active'] and game['step']==1 and user==game['players']['X']:
+        if clean_msg=="1":
+            game['mode']=1
+            game['players']['O']='BOT'
+            game['step']=2
+            send_text("Single Player selected.\nBet amount? (0 for no bet)")
+        elif clean_msg=="2":
+            game['mode']=2
+            game['step']=2
+            send_text("Multiplayer selected.\nBet amount? (0 for no bet)")
+        else:
+            send_text("⚠️ Type 1 or 2 only")
+        return
 
-    for i in range(9):
-        row, col = i // 3, i % 3
-        x, y = col * cell, row * cell
-        cx, cy = x + cell // 2, y + cell // 2
-        val = board_state[i]
+    # --- BET SELECTION ---
+    if game['active'] and game['step']==2 and user==game['players']['X']:
+        try:
+            amount=int(clean_msg)
+            if amount<0: raise ValueError
+            game['bet']=amount
+            if amount>0:
+                economy_api.add_currency(user,-amount)
+            game['step']=3
+            intro=f"Game started! Bet: {amount}\n"
+            if game['mode']==2:
+                intro+="Waiting for Player O to join..."
+            send_text(intro+"Type 1-9 to play.")
+            media_api.send_image(room_id, generate_board_image(game['board']), caption="TicTacToe Board")
+        except:
+            send_text("⚠️ Invalid amount")
+        return
 
-        if val is None:
-            num_str = str(i+1)
-            bbox = d.textbbox((0, 0), num_str, font=fnt_num)
-            d.text((cx - (bbox[2]-bbox[0])/2, cy - (bbox[3]-bbox[1])/1.5), num_str, font=fnt_num, fill=(50, 50, 60)) 
-        elif val == 'X':
-            offset = 30
-            d.line([(x+offset, y+offset), (x+cell-offset, y+cell-offset)], fill=(255, 50, 50), width=15)
-            d.line([(x+cell-offset, y+offset), (x+offset, y+cell-offset)], fill=(255, 50, 50), width=15)
-        elif val == 'O':
-            offset = 30
-            d.ellipse([(x+offset, y+offset), (x+cell-offset, y+cell-offset)], outline=(50, 150, 255), width=15)
-    return img
+    # --- GAMEPLAY ---
+    if game['active'] and game['step']==3:
+        if not clean_msg.isdigit(): return
+        pos=int(clean_msg)-1
+        if pos<0 or pos>8: return
 
-class TicTacToe:
-    def __init__(self, room_id, creator_id, creator_avatar=None):
-        self.room_id = room_id
-        self.p1_name = creator_id
-        self.p1_avatar = creator_avatar # Store Avatar
-        self.p2_name = None
-        self.p2_avatar = None
-        self.board = [None]*9
-        self.turn = 'X'
-        self.state = 'setup_mode'
-        self.mode = None
-        self.bet = 0
-        self.last_interaction = time.time()
-    def check_win(self):
-        wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
-        for a, b, c in wins:
-            if self.board[a] and self.board[a] == self.board[b] == self.board[c]: return self.board[a]
-        if None not in self.board: return 'draw'
-        return None
-    def bot_move(self):
-        empty = [i for i, x in enumerate(self.board) if x is None]
-        return random.choice(empty) if empty else None
+        current_turn=game['turn']
 
-# --- Handler with Avatar Support ---
-def handle_command(bot, command, room_id, user, args, avatar_url=None):
-    global games
-    current_game = games.get(room_id)
+        # Multiplayer: assign O if not joined
+        if game['mode']==2 and game['players']['O'] is None and user!=game['players']['X']:
+            game['players']['O']=user
+            if game['bet']>0:
+                economy_api.add_currency(user,-game['bet'])
+            send_text(f"{user} joined as Player O!")
 
-    if command == "tic":
-        if current_game:
-            bot.send_message(room_id, "⚠️ Game running!")
-            return True
-        # Create game and save Creator's Avatar
-        games[room_id] = TicTacToe(room_id, user, avatar_url)
-        bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose:\n1️⃣ Single\n2️⃣ Multi")
-        return True
+        expected_user=game['players'][current_turn]
+        if expected_user!='BOT' and user!=expected_user:
+            send_text(f"⚠️ {user}, wait for {expected_user}")
+            return
+        if game['board'][pos]!=' ':
+            send_text("⚠️ Position filled")
+            return
 
-    if command == "stop" and current_game:
-        del games[room_id]
-        bot.send_message(room_id, "🛑 Stopped.")
-        return True
+        # Make move
+        game['board'][pos]=current_turn
+        game['started_at']=time.time()  # reset timeout after move
 
-    if current_game:
-        game = current_game
-        
-        # Update Avatar if not set (Just in case they played a move and we caught it now)
-        if user == game.p1_name and avatar_url and not game.p1_avatar:
-            game.p1_avatar = avatar_url
-        if user == game.p2_name and avatar_url and not game.p2_avatar:
-            game.p2_avatar = avatar_url
+        winner=check_winner(game['board'])
+        media_api.send_image(room_id, generate_board_image(game['board']), caption=f"Turn: {game['turn']}")
 
-        if game.state == 'setup_mode' and user == game.p1_name:
-            if command == "1":
-                game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.last_interaction = time.time()
-                bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
-                return True
-            elif command == "2":
-                game.mode = 2; game.state = 'setup_bet'; game.last_interaction = time.time()
-                bot.send_message(room_id, "💰 Bet?\n1️⃣ Fun (0)\n2️⃣ 100 Coins")
-                return True
-        
-        elif game.state == 'setup_bet' and user == game.p1_name:
-            if command in ["1", "2"]:
-                game.bet = 0 if command == "1" else 100; game.last_interaction = time.time()
-                if game.bet > 0: update_coins(game.p1_name, -game.bet)
-                
-                if game.mode == 1:
-                    game.state = 'playing'
-                    img = draw_board(game.board)
-                    link = upload_image(bot, img, room_id)
-                    bot.send_message(room_id, f"🔥 Started vs Bot\nType **1-9**")
-                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
+        if winner:
+            players_list=[v for v in game['players'].values() if v]
+            if winner=='Draw':
+                send_text("🤝 Draw! Bets refunded.")
+                if game['bet']>0:
+                    for p in players_list:
+                        if p!='BOT':
+                            economy_api.add_currency(p,game['bet'])
+            elif winner=='X':
+                win_user=game['players']['X']
+                prize = game['bet']*2
+                msg=f"🏆 {win_user} wins! 🎉 Won {prize} coins! 💰" if game['mode']==1 else f"🏆 {win_user} wins!"
+                send_text(msg)
+                if game['bet']>0:
+                    economy_api.add_currency(win_user, prize)
+            elif winner=='O':
+                if game['mode']==1:
+                    send_text("😢 BOT wins! Better luck next time.")
                 else:
-                    game.state = 'waiting_join'
-                    bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
-                return True
-        
-        elif game.state == 'waiting_join':
-            if command == "j" and user != game.p1_name:
-                game.p2_name = user
-                game.p2_avatar = avatar_url # Save Player 2 Avatar
-                game.last_interaction = time.time()
-                if game.bet > 0: update_coins(game.p2_name, -game.bet)
-                
-                game.state = 'playing'
-                img = draw_board(game.board)
-                link = upload_image(bot, img, room_id)
-                bot.send_message(room_id, f"🥊 @{game.p1_name} vs @{game.p2_name}\n@{game.p1_name} turn!")
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
-                return True
-        
-        elif game.state == 'playing':
-            if command.isdigit() and 1 <= int(command) <= 9:
-                idx = int(command) - 1
-                curr_p = game.p1_name if game.turn == 'X' else game.p2_name
-                if user != curr_p: return False
-                if game.board[idx]: 
-                    bot.send_message(room_id, "🚫 Taken!")
-                    return True
-                
-                game.last_interaction = time.time()
-                game.board[idx] = game.turn
-                win = game.check_win()
-                
-                if win:
-                    # Determine Winner Name & Avatar
-                    w_user = game.p1_name if win=='X' else game.p2_name
-                    w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
-                    
-                    if win == 'draw':
-                        bot.send_message(room_id, "🤝 Draw!")
-                        if game.bet > 0:
-                            update_coins(game.p1_name, game.bet)
-                            if game.mode==2: update_coins(game.p2_name, game.bet)
-                    else:
-                        pot = game.bet * 2
-                        # --- Winner Card with Real DP ---
-                        card = draw_winner_card(w_user, win, w_avatar)
-                        clink = upload_image(bot, card, room_id)
-                        if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
-                        bot.send_message(room_id, f"🎉 @{w_user} Won {pot} coins!")
-                        if game.bet > 0: update_coins(w_user, pot)
-                    
-                    del games[room_id]
-                    return True
+                    win_user=game['players']['O']
+                    prize = game['bet']*2
+                    msg=f"🏆 {win_user} wins!"
+                    send_text(msg)
+                    if game['bet']>0:
+                        economy_api.add_currency(win_user, prize)
+            game['active']=False
+            return
 
-                # Switch Turn Logic
-                game.turn = 'O' if game.turn == 'X' else 'X'
-                if game.mode == 1 and game.turn == 'O':
-                    b_idx = game.bot_move()
-                    if b_idx is not None:
-                        game.board[b_idx] = 'O'
-                        win = game.check_win()
-                        if win:
-                            img = draw_board(game.board)
-                            link = upload_image(bot, img, room_id)
-                            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": "gm_be"})
-                            bot.send_message(room_id, "🤖 Bot Wins!")
-                            del games[room_id]
-                            return True
-                        game.turn = 'X'
+        # Switch turn
+        game['turn']='O' if current_turn=='X' else 'X'
+
+        # BOT move for Single Player
+        if game['mode']==1 and game['turn']=='O':
+            empty=[i for i,x in enumerate(game['board']) if x==' ']
+            if empty:
+                bot_move=random.choice(empty)
+                game['board'][bot_move]='O'
+                game['started_at']=time.time()  # reset timeout after BOT move
+                winner_bot=check_winner(game['board'])
+                media_api.send_image(room_id, generate_board_image(game['board']), caption="🤖 BOT moved")
                 
-                img = draw_board(game.board)
-                link = upload_image(bot, img, room_id)
-                nxt = game.p1_name if game.turn=='X' else game.p2_name
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {nxt}", "id": "gm_u"})
-                return True
-    return False
+                if winner_bot:
+                    if winner_bot=='Draw':
+                        send_text("🤝 Draw! Your bet has been refunded.")
+                        if game['bet']>0:
+                            economy_api.add_currency(game['players']['X'], game['bet'])
+                    elif winner_bot=='O':
+                        send_text("😢 BOT wins! Better luck next time.")
+                    else:
+                        prize = game['bet']*2
+                        send_text(f"🏆 You win! 🎉 Won {prize} coins! 💰")
+                        if game['bet']>0:
+                            economy_api.add_currency(game['players']['X'], prize)
+                    game['active'] = False
+                    return
+                game['turn']='X'
