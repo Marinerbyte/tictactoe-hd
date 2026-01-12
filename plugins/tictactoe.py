@@ -1,12 +1,11 @@
-# file: games/tic_tac_toe_polish.py
-
 import io
 import random
 import time
-import threading
 from PIL import Image, ImageDraw, ImageFont
+import threading
 
 TRIGGER = "!tic"
+LEADER_COMMAND = "!ticleader"
 
 # --- Helper Functions ---
 
@@ -69,27 +68,64 @@ def check_winner(board):
     return None
 
 # --- Timeout Thread ---
-
-def start_timeout_thread(game, send_text, economy_api):
-    def check_timeout():
+def start_timeout(game, send_text, economy_api):
+    def monitor():
         while game['active']:
-            if game['started_at'] and time.time()-game['started_at']>90:
+            if game['started_at'] and time.time()-game['started_at'] > 90:
                 players_list = [v for v in game['players'].values() if v]
                 send_text(f"⏰ Game Timeout! Tic Tac Toe between {', '.join(players_list)} ended.")
                 if game['bet']>0:
                     for p in players_list:
-                        if p != 'BOT':
+                        if p!='BOT':
                             economy_api.add_currency(p, game['bet'])
                 game['active'] = False
                 break
-            time.sleep(5)
-    t = threading.Thread(target=check_timeout)
+            time.sleep(3)
+    t = threading.Thread(target=monitor)
     t.daemon = True
     t.start()
 
-# --- Main Handler ---
+# --- Leaderboard Helper ---
+def update_score(state, winner, players, bet):
+    if 'tic_scores' not in state:
+        state['tic_scores'] = {}
+    for p in players:
+        if p=='BOT': continue
+        if p not in state['tic_scores']:
+            state['tic_scores'][p] = {'wins':0,'losses':0,'draws':0,'coins':0}
 
+    if winner=='Draw':
+        for p in players:
+            if p!='BOT':
+                state['tic_scores'][p]['draws'] +=1
+                state['tic_scores'][p]['coins'] += bet  # refund
+    elif winner in ['X','O']:
+        win_p = players[winner]
+        lose_p = [v for k,v in players.items() if v and v!=win_p and v!='BOT']
+        if win_p!='BOT':
+            state['tic_scores'][win_p]['wins'] +=1
+            state['tic_scores'][win_p]['coins'] += bet*2
+        for lp in lose_p:
+            state['tic_scores'][lp]['losses'] +=1
+
+def show_leaderboard(state):
+    if 'tic_scores' not in state or not state['tic_scores']:
+        return "Leaderboard is empty!"
+    scores = sorted(state['tic_scores'].items(), key=lambda x:x[1]['coins'], reverse=True)
+    msg = "🏆 Tic Tac Toe Leaderboard 🏆\n"
+    for i, (p,data) in enumerate(scores[:5],1):
+        msg += f"{i}. {p}: Wins:{data['wins']} Losses:{data['losses']} Draws:{data['draws']} Coins:{data['coins']}\n"
+    return msg.strip()
+
+# --- Main Handler ---
 def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, media_api, add_log):
+    clean_msg = msg.strip()
+
+    # --- Leaderboard Command ---
+    if clean_msg.lower() == LEADER_COMMAND:
+        send_text(show_leaderboard(state))
+        return
+
     if 'tic_game' not in state:
         state['tic_game'] = {
             'active': False,
@@ -103,12 +139,11 @@ def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, 
         }
 
     game = state['tic_game']
-    clean_msg = msg.strip()
 
-    # --- START GAME ---
-    if clean_msg.lower().startswith("!tic"):
+    # --- START ---
+    if clean_msg.lower().startswith(TRIGGER):
         if game['active']:
-            send_text("⚠️ Game already running! Wait or play your move.")
+            send_text("⚠️ Game already running!")
             return
         game['board']=[' ']*9
         game['turn']='X'
@@ -117,7 +152,7 @@ def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, 
         game['step']=1
         game['started_at']=time.time()
         send_text("🎮 Tic Tac Toe 🎮\nSelect Mode:\n1️⃣ Single Player\n2️⃣ Multiplayer")
-        start_timeout_thread(game, send_text, economy_api)
+        start_timeout(game, send_text, economy_api)
         return
 
     # --- MODE SELECTION ---
@@ -142,7 +177,7 @@ def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, 
             if amount<0: raise ValueError
             game['bet']=amount
             if amount>0:
-                economy_api.add_currency(user,-amount)
+                economy_api.add_currency(user, -amount)
             game['step']=3
             intro=f"Game started! Bet: {amount}\n"
             if game['mode']==2:
@@ -159,16 +194,14 @@ def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, 
         pos=int(clean_msg)-1
         if pos<0 or pos>8: return
 
-        current_turn=game['turn']
-
-        # Multiplayer: assign O if not joined
+        # Multiplayer join O
         if game['mode']==2 and game['players']['O'] is None and user!=game['players']['X']:
             game['players']['O']=user
             if game['bet']>0:
-                economy_api.add_currency(user,-game['bet'])
+                economy_api.add_currency(user, -game['bet'])
             send_text(f"{user} joined as Player O!")
 
-        expected_user=game['players'][current_turn]
+        expected_user=game['players'][game['turn']]
         if expected_user!='BOT' and user!=expected_user:
             send_text(f"⚠️ {user}, wait for {expected_user}")
             return
@@ -177,65 +210,50 @@ def handle(user, msg, room_id, state, send_text, send_raw, db_api, economy_api, 
             return
 
         # Make move
-        game['board'][pos]=current_turn
-        game['started_at']=time.time()  # reset timeout after move
-
-        winner=check_winner(game['board'])
+        game['board'][pos]=game['turn']
+        game['started_at']=time.time()  # reset timeout
         media_api.send_image(room_id, generate_board_image(game['board']), caption=f"Turn: {game['turn']}")
 
+        winner=check_winner(game['board'])
         if winner:
-            players_list=[v for v in game['players'].values() if v]
+            players_list = {k:v for k,v in game['players'].items() if v}
+            update_score(state, winner, players_list, game['bet'])
             if winner=='Draw':
                 send_text("🤝 Draw! Bets refunded.")
-                if game['bet']>0:
-                    for p in players_list:
-                        if p!='BOT':
-                            economy_api.add_currency(p,game['bet'])
             elif winner=='X':
-                win_user=game['players']['X']
-                prize = game['bet']*2
-                msg=f"🏆 {win_user} wins! 🎉 Won {prize} coins! 💰" if game['mode']==1 else f"🏆 {win_user} wins!"
-                send_text(msg)
-                if game['bet']>0:
-                    economy_api.add_currency(win_user, prize)
+                if game['mode']==1:
+                    send_text(f"🏆 You win! 🎉 Won {game['bet']*2} coins! 💰")
+                else:
+                    send_text(f"🏆 {game['players']['X']} wins!")
             elif winner=='O':
                 if game['mode']==1:
                     send_text("😢 BOT wins! Better luck next time.")
                 else:
-                    win_user=game['players']['O']
-                    prize = game['bet']*2
-                    msg=f"🏆 {win_user} wins!"
-                    send_text(msg)
-                    if game['bet']>0:
-                        economy_api.add_currency(win_user, prize)
+                    send_text(f"🏆 {game['players']['O']} wins!")
             game['active']=False
             return
 
         # Switch turn
-        game['turn']='O' if current_turn=='X' else 'X'
+        game['turn']='O' if game['turn']=='X' else 'X'
 
-        # BOT move for Single Player
+        # BOT move
         if game['mode']==1 and game['turn']=='O':
             empty=[i for i,x in enumerate(game['board']) if x==' ']
             if empty:
                 bot_move=random.choice(empty)
                 game['board'][bot_move]='O'
-                game['started_at']=time.time()  # reset timeout after BOT move
+                game['started_at']=time.time()
                 winner_bot=check_winner(game['board'])
                 media_api.send_image(room_id, generate_board_image(game['board']), caption="🤖 BOT moved")
-                
                 if winner_bot:
+                    players_list = {k:v for k,v in game['players'].items() if v}
+                    update_score(state, winner_bot, players_list, game['bet'])
                     if winner_bot=='Draw':
-                        send_text("🤝 Draw! Your bet has been refunded.")
-                        if game['bet']>0:
-                            economy_api.add_currency(game['players']['X'], game['bet'])
+                        send_text("🤝 Draw! Your bet refunded.")
                     elif winner_bot=='O':
                         send_text("😢 BOT wins! Better luck next time.")
                     else:
-                        prize = game['bet']*2
-                        send_text(f"🏆 You win! 🎉 Won {prize} coins! 💰")
-                        if game['bet']>0:
-                            economy_api.add_currency(game['players']['X'], prize)
-                    game['active'] = False
+                        send_text(f"🏆 You win! 🎉 Won {game['bet']*2} coins! 💰")
+                    game['active']=False
                     return
                 game['turn']='X'
