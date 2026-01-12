@@ -5,6 +5,7 @@ import io
 import sys
 import os
 import uuid
+import threading # Zaroori hai taaki Bot hang na ho
 from PIL import Image, ImageDraw, ImageFont
 
 # Import DB
@@ -14,7 +15,7 @@ try:
 except Exception as e:
     print(f"DB Import Error: {e}")
 
-# Helper Functions (Upload/Coins/Image) - Same as before...
+# --- HELPER FUNCTIONS ---
 def update_coins(user_id, amount):
     conn = db.get_connection()
     if not conn: return
@@ -43,7 +44,7 @@ def upload_image(bot, image):
         return res.get('url') or res.get('data', {}).get('url')
     except: return None
 
-def draw_gun_result(status, username):
+def draw_gun_result(status, username, bullets_count=1):
     W, H = 400, 300
     color = (20, 20, 20)
     if status == "BANG": color = (50, 10, 10)
@@ -52,14 +53,17 @@ def draw_gun_result(status, username):
     cx, cy = W//2, H//2
     rad = 80
     d.ellipse([(cx-rad, cy-rad), (cx+rad, cy+rad)], outline="gray", width=5)
+    
     import math
     for i in range(6):
         angle = math.radians(i * 60)
         ox = cx + int(50 * math.cos(angle))
         oy = cy + int(50 * math.sin(angle))
         fill = "gray"
-        if status == "BANG" and i == 4: fill = "red"
+        if status == "BANG" and i == 0: fill = "red" 
+        if bullets_count > 1 and i < bullets_count and status == "SAFE": fill = "darkgray" 
         d.ellipse([(ox-15, oy-15), (ox+15, oy+15)], fill=fill)
+
     try: font = ImageFont.truetype("arial.ttf", 40)
     except: font = ImageFont.load_default()
     text = "CLICK..." if status == "SAFE" else "BANG!!!"
@@ -73,49 +77,72 @@ def draw_gun_result(status, username):
     d.text(((W-(bbox[2]-bbox[0]))/2, 250), msg, fill="white", font=font_s)
     return img
 
-# --- MAIN COMMAND ---
-# Note: Added 'data' parameter at the end
+# --- GAME LOGIC (RUNS IN BACKGROUND) ---
+def play_roulette_thread(bot, room_id, user, user_id, is_hard):
+    try:
+        # 1. THE ILLUSION (Spinning)
+        bot.send_message(room_id, f"🔄 @{user} spins the cylinder... *(Tkk.. Tkk.. Tkk..)*")
+        time.sleep(2) # 2 Seconds delay for sound effect illusion
+
+        # 2. THE TENSION (Holding Breath)
+        bot.send_message(room_id, "😨 *Pointing at head... Holding breath...*")
+        time.sleep(1.5) # 1.5 Seconds delay for tension
+
+        # 3. THE RESULT
+        bullets = 3 if is_hard else 1
+        reward = 1500 if is_hard else 500
+        roll = random.randint(1, 6)
+        
+        dead = False
+        if is_hard:
+            if roll <= 3: dead = True
+        else:
+            if roll == 6: dead = True
+            
+        if dead:
+            # BANG!
+            status = "BANG"
+            img = draw_gun_result(status, user, bullets)
+            link = upload_image(bot, img)
+            
+            bot.send_message(room_id, f"💥 **BANG!** @{user} dropped dead!")
+            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BANG", "id": uuid.uuid4().hex})
+            
+            if user_id:
+                time.sleep(1)
+                bot.send_message(room_id, "😈 *Bot drags the body out...* (Kicking)")
+                time.sleep(1)
+                kick_payload = {"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": user_id}
+                bot.send_json(kick_payload)
+        else:
+            # SAFE
+            status = "SAFE"
+            update_coins(user, reward)
+            img = draw_gun_result(status, user, bullets)
+            link = upload_image(bot, img)
+            
+            mode_text = "(Hard Mode)" if is_hard else ""
+            bot.send_message(room_id, f"😅 **CLICK...** Empty Chamber! {mode_text}\n@{user} wins **{reward} Coins** for bravery.")
+            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Safe", "id": uuid.uuid4().hex})
+
+    except Exception as e:
+        print(f"Roulette Error: {e}")
+
+# --- MAIN COMMAND HANDLER ---
 def handle_command(bot, command, room_id, user, args, data):
     
     cmd_clean = command.lower().strip()
 
     if cmd_clean == "shoot":
-        
-        # --- NEW: Extract ID directly from raw data ---
-        # Engine modify karne ki zaroorat nahi padi!
         target_user_id = data.get('userid') or data.get('id')
-
-        bullet = random.randint(1, 6)
         
-        if bullet == 6: # DEATH
-            status = "BANG"
-            img = draw_gun_result(status, user)
-            link = upload_image(bot, img)
-            
-            bot.send_message(room_id, f"💥 **BANG!** @{user} lost!")
-            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BANG", "id": uuid.uuid4().hex})
-            
-            # --- KICK LOGIC ---
-            if target_user_id:
-                time.sleep(1)
-                kick_payload = {
-                    "handler": "kickuser",
-                    "id": uuid.uuid4().hex,
-                    "roomid": room_id,
-                    "to": target_user_id # Numeric ID here
-                }
-                bot.send_json(kick_payload)
-                bot.send_message(room_id, "😈 Kicked!")
-            else:
-                bot.send_message(room_id, "⚠️ ID not found (Bot needs Numeric ID to kick)")
-
-        else: # SAFE
-            status = "SAFE"
-            update_coins(user, 500)
-            img = draw_gun_result(status, user)
-            link = upload_image(bot, img)
-            bot.send_message(room_id, f"😅 Safe! Won 500 Coins.")
-            if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Safe", "id": uuid.uuid4().hex})
+        is_hard = False
+        if args and args[0].lower() == "hard":
+            is_hard = True
+        
+        # Start Game in Background Thread (Taaki bot hang na ho)
+        t = threading.Thread(target=play_roulette_thread, args=(bot, room_id, user, target_user_id, is_hard))
+        t.start()
             
         return True
 
