@@ -18,54 +18,37 @@ except Exception as e:
 # --- GLOBAL STATE ---
 games = {} 
 games_lock = threading.Lock()
-BOT_INSTANCE = None # Background thread ke liye Bot ka reference
+BOT_INSTANCE = None 
 
-# --- SETUP FUNCTION (Called automatically by Plugin Loader) ---
+# --- SETUP ---
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[TicTacToe] Plugin Setup Complete & Background Cleaner Ready.")
+    print("[TicTacToe] Setup Complete.")
 
-# --- CLEANER THREAD (Auto-Close & Notify) ---
+# --- CLEANER THREAD ---
 def game_cleanup_loop():
     while True:
-        time.sleep(10) # Check every 10 seconds
+        time.sleep(10)
         now = time.time()
         to_remove = []
-        
-        # 1. Identify Expired Games
         with games_lock:
             for room_id, game in games.items():
-                if now - game.last_interaction > 90: # 90 Seconds Limit
+                if now - game.last_interaction > 90:
                     to_remove.append(room_id)
-        
-        # 2. Notify & Delete
         for room_id in to_remove:
-            # Send Notification if Bot is connected
             if BOT_INSTANCE:
-                try:
-                    BOT_INSTANCE.send_message(room_id, "⌛ Game closed due to inactivity (90s timeout).")
-                except:
-                    pass # Connection error ho to ignore karo
-            
-            # Delete from Memory
+                try: BOT_INSTANCE.send_message(room_id, "⌛ Game closed due to inactivity.")
+                except: pass
             with games_lock:
-                if room_id in games:
-                    del games[room_id]
-                    print(f"[Auto-Clean] Closed game in {room_id}")
+                if room_id in games: del games[room_id]
 
-# Start Cleaner Thread (Daemon runs in background)
 if threading.active_count() < 10: 
-    t = threading.Thread(target=game_cleanup_loop, daemon=True)
-    t.start()
+    threading.Thread(target=game_cleanup_loop, daemon=True).start()
 
 # --- HELPER FUNCTIONS ---
 def get_font(size):
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "arial.ttf"
-    ]
+    font_paths = ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"]
     for path in font_paths:
         try: return ImageFont.truetype(path, size)
         except: continue
@@ -76,14 +59,11 @@ def update_coins(user_id, amount):
     if not conn: return
     cur = conn.cursor()
     try:
-        try:
-            cur.execute("INSERT INTO users (user_id, username, global_score) VALUES (%s, %s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
-        except:
-            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score) VALUES (?, ?, 0)", (user_id, user_id))
+        try: cur.execute("INSERT INTO users (user_id, username, global_score) VALUES (%s, %s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, user_id))
+        except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score) VALUES (?, ?, 0)", (user_id, user_id))
         
         query = "UPDATE users SET global_score = global_score + %s WHERE user_id = %s"
-        if not db.DATABASE_URL.startswith("postgres"):
-            query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
+        if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET global_score = global_score + ? WHERE user_id = ?"
         cur.execute(query, (amount, user_id))
         conn.commit()
     except: pass
@@ -100,12 +80,8 @@ def upload_image(bot, image, room_id):
         data = {'token': bot.token, 'uploadType': 'image', 'UserID': uid}
         r = requests.post(url, files=files, data=data)
         res = r.json()
-        link = res.get('url') or res.get('data', {}).get('url')
-        if not link: print(f"[Upload Error] {r.text}")
-        return link
-    except Exception as e:
-        print(f"Upload Fail: {e}")
-        return None
+        return res.get('url') or res.get('data', {}).get('url')
+    except: return None
 
 def get_avatar_img(url):
     try:
@@ -120,8 +96,7 @@ def get_avatar_img(url):
             output = Image.new('RGBA', (120, 120), (0,0,0,0))
             output.paste(img, (0,0), mask)
             return output
-    except: pass
-    return None
+    except: return None
 
 def draw_winner_card(username, winner_symbol, avatar_url=None):
     W, H = 400, 400
@@ -160,17 +135,14 @@ def draw_board(board_state):
     img = Image.new('RGB', (size, size), color=(20, 20, 25)) 
     d = ImageDraw.Draw(img)
     fnt_num = get_font(60)
-
     for i in range(1, 3):
         d.line([(cell * i, 15), (cell * i, size - 15)], fill=(100, 100, 100), width=4)
         d.line([(15, cell * i), (size - 15, cell * i)], fill=(100, 100, 100), width=4)
-
     for i in range(9):
         row, col = i // 3, i % 3
         x, y = col * cell, row * cell
         cx, cy = x + cell // 2, y + cell // 2
         val = board_state[i]
-
         if val is None:
             num_str = str(i+1)
             bbox = d.textbbox((0, 0), num_str, font=fnt_num)
@@ -197,17 +169,13 @@ class TicTacToe:
         self.mode = None
         self.bet = 0
         self.last_interaction = time.time()
-    
-    def touch(self):
-        self.last_interaction = time.time()
-
+    def touch(self): self.last_interaction = time.time()
     def check_win(self):
         wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
         for a, b, c in wins:
             if self.board[a] and self.board[a] == self.board[b] == self.board[c]: return self.board[a]
         if None not in self.board: return 'draw'
         return None
-    
     def bot_move(self):
         empty = [i for i, x in enumerate(self.board) if x is None]
         return random.choice(empty) if empty else None
@@ -216,35 +184,26 @@ class TicTacToe:
 def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs):
     try:
         global games, BOT_INSTANCE
-        # Update Global Bot Reference
         if BOT_INSTANCE is None: BOT_INSTANCE = bot
         
-        with games_lock:
-            current_game = games.get(room_id)
-        
+        with games_lock: current_game = games.get(room_id)
         cmd_clean = command.lower().strip()
 
-        # START
         if cmd_clean == "tic":
             if current_game:
                 bot.send_message(room_id, "⚠️ Game running! Type 'stop'.")
                 return True
-            with games_lock:
-                games[room_id] = TicTacToe(room_id, user, avatar_url)
+            with games_lock: games[room_id] = TicTacToe(room_id, user, avatar_url)
             bot.send_message(room_id, f"🎮 **Tic-Tac-Toe**\n@{user}, Choose:\n1️⃣ Single\n2️⃣ Multi")
             return True
 
-        # STOP
         if cmd_clean == "stop" and current_game:
             with games_lock: del games[room_id]
-            bot.send_message(room_id, "🛑 Game Stopped.")
+            bot.send_message(room_id, "🛑 Stopped.")
             return True
 
-        # GAMEPLAY
         if current_game:
             game = current_game
-            
-            # Avatar Sync
             if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
             if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
@@ -264,7 +223,6 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                 if cmd_clean in ["1", "2"]:
                     game.bet = 0 if cmd_clean == "1" else 100; game.touch()
                     if game.bet > 0: update_coins(game.p1_name, -game.bet)
-                    
                     if game.mode == 1:
                         game.state = 'playing'
                         img = draw_board(game.board)
@@ -276,19 +234,14 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                         bot.send_message(room_id, f"⚔️ Waiting...\nType **'j'** to join!")
                     return True
             
-            # 3. JOIN (FIXED LOGIC)
+            # 3. JOIN
             elif game.state == 'waiting_join':
-                # Check for 'j' or 'join'
                 if cmd_clean in ["j", "join"]:
                     if user == game.p1_name:
-                        bot.send_message(room_id, "⚠️ You created the game, wait for opponent!")
+                        bot.send_message(room_id, "⚠️ Wait for opponent!")
                         return True
-                        
-                    game.p2_name = user
-                    game.p2_avatar = avatar_url
-                    game.touch()
+                    game.p2_name = user; game.p2_avatar = avatar_url; game.touch()
                     if game.bet > 0: update_coins(game.p2_name, -game.bet)
-                    
                     game.state = 'playing'
                     img = draw_board(game.board)
                     link = upload_image(bot, img, room_id)
@@ -296,12 +249,11 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                     if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "gm_s"})
                     return True
             
-            # 4. MOVES
+            # 4. PLAYING
             elif game.state == 'playing':
                 if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
                     idx = int(cmd_clean) - 1
                     curr_p = game.p1_name if game.turn == 'X' else game.p2_name
-                    
                     if user != curr_p: return False
                     if game.board[idx]: 
                         bot.send_message(room_id, "🚫 Taken!")
@@ -321,18 +273,28 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                                 update_coins(game.p1_name, game.bet)
                                 if game.mode==2: update_coins(game.p2_name, game.bet)
                         else:
-                            pot = game.bet * 2
+                            # --- WINNER REWARD LOGIC ---
+                            reward_msg = ""
+                            if game.mode == 1:
+                                # Single Player Reward (500 Coins)
+                                update_coins(w_user, 500)
+                                reward_msg = f"🎉 @{w_user} beat the Bot! Won 500 coins!"
+                            else:
+                                # Multiplayer Reward (Pot)
+                                pot = game.bet * 2
+                                if game.bet > 0: update_coins(w_user, pot)
+                                reward_msg = f"🎉 @{w_user} Won {pot} coins!"
+
+                            # Draw Card
                             card = draw_winner_card(w_user, win, w_avatar)
                             clink = upload_image(bot, card, room_id)
                             if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
-                            bot.send_message(room_id, f"🎉 @{w_user} Won {pot} coins!")
-                            if game.bet > 0: update_coins(w_user, pot)
+                            bot.send_message(room_id, reward_msg)
                         
                         with games_lock: del games[room_id]
                         return True
 
                     game.turn = 'O' if game.turn == 'X' else 'X'
-                    
                     if game.mode == 1 and game.turn == 'O':
                         b_idx = game.bot_move()
                         if b_idx is not None:
@@ -352,9 +314,7 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                     nxt = game.p1_name if game.turn=='X' else game.p2_name
                     if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": f"Turn: {nxt}", "id": "gm_u"})
                     return True
-
         return False
-        
     except Exception as e:
         bot.send_message(room_id, f"⚠️ Error: {str(e)}")
         traceback.print_exc()
