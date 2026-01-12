@@ -8,7 +8,7 @@ import threading
 import traceback
 from PIL import Image, ImageDraw, ImageFont
 
-# Import DB safely
+# Import DB
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     import db
@@ -55,7 +55,6 @@ def get_font(size):
     return ImageFont.load_default()
 
 def update_coins(user_id, amount):
-    """Coins update karta hai"""
     conn = db.get_connection()
     if not conn: return
     cur = conn.cursor()
@@ -71,7 +70,6 @@ def update_coins(user_id, amount):
     finally: conn.close()
 
 def add_win(user_id):
-    """Wins counter badhata hai (+1)"""
     conn = db.get_connection()
     if not conn: return
     cur = conn.cursor()
@@ -197,12 +195,17 @@ class TicTacToe:
         empty = [i for i, x in enumerate(self.board) if x is None]
         return random.choice(empty) if empty else None
 
-# --- MAIN HANDLER ---
-def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs):
+# --- MAIN HANDLER (UPDATED FOR NEW ENGINE) ---
+# Note: Last argument is now 'data', not kwargs or avatar_url directly
+def handle_command(bot, command, room_id, user, args, data):
     try:
         global games, BOT_INSTANCE
         if BOT_INSTANCE is None: BOT_INSTANCE = bot
         
+        # --- NEW: Extract Avatar Manually from Data ---
+        avatar_file = data.get("avatar")
+        avatar_url = f"https://cdn.howdies.app/avatar?image={avatar_file}" if avatar_file else None
+
         with games_lock: current_game = games.get(room_id)
         cmd_clean = command.lower().strip()
 
@@ -221,19 +224,19 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
 
         if current_game:
             game = current_game
+            
+            # Avatar Sync
             if user == game.p1_name and avatar_url: game.p1_avatar = avatar_url
             if user == game.p2_name and avatar_url: game.p2_avatar = avatar_url
 
-            # 1. SETUP - MODE SELECTION
+            # 1. SETUP
             if game.state == 'setup_mode' and user == game.p1_name:
                 if cmd_clean == "1":
                     game.mode = 1; game.p2_name = "Bot"; game.state = 'setup_bet'; game.touch()
-                    # Updated Text for Single Player
                     bot.send_message(room_id, "💰 Reward Mode?\n1️⃣ Free Play (Win 500)\n2️⃣ Bet 100 (Win 700)")
                     return True
                 elif cmd_clean == "2":
                     game.mode = 2; game.state = 'setup_bet'; game.touch()
-                    # Updated Text for Multi Player
                     bot.send_message(room_id, "💰 Bet Amount?\n1️⃣ Fun (No Reward)\n2️⃣ Bet 100 Coins")
                     return True
             
@@ -287,26 +290,19 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                         w_user = game.p1_name if win=='X' else game.p2_name
                         w_avatar = game.p1_avatar if win=='X' else game.p2_avatar
                         
-                        # --- WIN LOGIC ---
                         if win == 'draw':
                             bot.send_message(room_id, "🤝 Draw!")
                             if game.bet > 0:
                                 update_coins(game.p1_name, game.bet)
                                 if game.mode==2: update_coins(game.p2_name, game.bet)
                         else:
-                            # 1. Add Win to DB
                             add_win(w_user)
-
-                            # 2. Calculate Reward
                             reward_msg = ""
                             if game.mode == 1:
-                                # Single Player Reward
-                                total = 500
-                                if game.bet > 0: total = 700 # 500 Bonus + 200 Winnings
+                                total = 500 if game.bet == 0 else 700
                                 update_coins(w_user, total)
                                 reward_msg = f"🎉 @{w_user} Won {total} coins!"
                             else:
-                                # Multiplayer Reward
                                 pot = game.bet * 2
                                 if pot > 0:
                                     update_coins(w_user, pot)
@@ -314,7 +310,6 @@ def handle_command(bot, command, room_id, user, args, avatar_url=None, **kwargs)
                                 else:
                                     reward_msg = f"🎉 @{w_user} Won! (No Bet)"
 
-                            # 3. Draw Card & Send
                             card = draw_winner_card(w_user, win, w_avatar)
                             clink = upload_image(bot, card, room_id)
                             if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win", "id": "gm_w"})
