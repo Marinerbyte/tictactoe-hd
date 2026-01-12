@@ -1,83 +1,72 @@
 import requests
-from datetime import datetime
+
+# Howdies endpoints (reference bot style)
+USER_API = "https://api.howdies.app/api/user/{}"
+AVATAR_CDN = "https://cdn.howdies.app/avatar?image={}"
 
 def setup(bot):
-    print("[Plugin] profile_dp loaded")
+    pass
 
-def fetch_profile(bot, username):
-    url = f"https://api.howdies.app/api/profile/{username}"
-    headers = {
-        "Authorization": f"Bearer {bot.token}",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://howdies.app"
-    }
-    r = requests.get(url, headers=headers, timeout=10)
-    if r.status_code == 200:
-        return r.json()
-    return None
+
+def fetch_user(username):
+    """
+    Reference bot logic:
+    direct username → API call
+    """
+    try:
+        r = requests.get(USER_API.format(username), timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return data.get("data") or data
+    except Exception:
+        return None
+
 
 def handle_command(bot, command, room_id, user, args):
+    command = command.lower()
+
     if command not in ("dp", "pro"):
         return False
 
     if not args:
-        bot.send_message(room_id, f"Usage: !{command} <username>")
+        bot.send_message(room_id, "❌ Username missing")
         return True
 
     username = args[0].lstrip("@")
 
-    data = fetch_profile(bot, username)
+    data = fetch_user(username)
     if not data:
-        bot.send_message(room_id, f"Profile not found: @{username}")
+        bot.send_message(room_id, f"❌ User not found: @{username}")
         return True
 
-    # ---- DP COMMAND ----
+    # ---------------- DP ----------------
     if command == "dp":
-        avatar = data.get("avatar") or data.get("avatarUrl") or data.get("photo")
+        avatar = data.get("avatar")
         if not avatar:
-            bot.send_message(room_id, f"@{username} has no profile photo.")
-        else:
-            bot.send_message(room_id, avatar)
+            bot.send_message(room_id, f"❌ @{username} has no profile picture")
+            return True
+
+        avatar_url = AVATAR_CDN.format(avatar)
+        bot.send_message(room_id, avatar_url)
         return True
 
-    # ---- PROFILE COMMAND ----
-    uid   = data.get("id", "—")
-    uname = f"@{data.get('username', username)}"
-    nick  = data.get("nickname") or "—"
+    # ---------------- PROFILE ----------------
+    if command == "pro":
+        msg = (
+            f"🆔 User ID  : {data.get('id', '—')}\n"
+            f"👤 Username : @{data.get('username', '—')}\n"
+            f"🪪 Nick     : {data.get('nickname', '—')}\n"
+            f"♂️ ASL      : {data.get('age', '—')}, {data.get('gender', '—')}, {data.get('country', '—')}\n"
+            f"📅 Created  : {data.get('created_at', '—')}\n\n"
+            f"💬 Status   : {data.get('status', '—')}\n"
+            f"👁️ Views    : {data.get('views', 0)}\n"
+            f"👍 Likes    : {data.get('likes', 0)}\n\n"
+            f"👥 Friends  : {data.get('friends', 0)}\n"
+            f"❤️ Lover    : @{data.get('lover', '—')}\n\n"
+            f"🎁 Received : {data.get('gifts_received', 0)}\n"
+            f"🎁 Sent     : {data.get('gifts_sent', 0)}"
+        )
 
-    age    = data.get("age", "—")
-    gender = data.get("gender", "—")
-    loc    = data.get("location", "—")
-
-    created_raw = data.get("createdAt")
-    if created_raw:
-        try:
-            created = datetime.fromisoformat(created_raw[:10]).strftime("%d %B %Y")
-        except:
-            created = created_raw[:10]
-    else:
-        created = "—"
-
-    status  = data.get("status") or "—"
-    views   = data.get("views", 0)
-    likes   = data.get("likes", 0)
-    friends = data.get("friends", 0)
-
-    lover = data.get("lover")
-    lover = f"@{lover}" if lover else "—"
-
-    msg = (
-        f"🆔 User ID  : {uid}\n"
-        f"👤 Username : {uname}\n"
-        f"🪪 Nick     : {nick}\n"
-        f"♂️ ASL      : {age}, {gender}, {loc}\n"
-        f"📅 Created  : {created}\n\n"
-        f"💬 Status   : {status}\n"
-        f"👁️ Views    : {views}\n"
-        f"👍 Likes    : {likes}\n\n"
-        f"👥 Friends  : {friends}\n"
-        f"❤️ Lover    : {lover}"
-    )
-
-    bot.send_message(room_id, msg)
-    return True
+        bot.send_message(room_id, msg)
+        return True
