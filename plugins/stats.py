@@ -1,6 +1,5 @@
 import sys
 import os
-import threading
 import traceback
 
 # --- DB IMPORT ---
@@ -11,45 +10,49 @@ except Exception as e:
     print(f"DB Import Error: {e}")
 
 def handle_command(bot, command, room_id, user, args, data):
-    user_id = data.get('userid', user)
+    user_id = data.get('userid', user) # Prefer UserID, fallback to Username
     cmd = command.lower().strip()
 
-    # --- 1. VIEW SCORE (!score, !balance, !bal) ---
+    # --- SQL PLACEHOLDER DETECTION ---
+    # Postgres ke liye '%s', SQLite ke liye '?'
+    ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
+
+    # --- 1. VIEW SCORE (!score, !balance) ---
     if cmd in ["score", "balance", "bal", "coins", "stats"]:
         
-        # Agar user kisi aur ka score dekhna chahe (!score @username)
-        # (Abhi ke liye simple rakhte hain, sirf apna score)
         target_user = user
-        target_uid = user_id
+        target_uid = str(user_id) # Ensure String format
 
         try:
             conn = db.get_connection()
             cur = conn.cursor()
 
             # A. Get Global Stats
-            cur.execute("SELECT global_score, wins FROM users WHERE user_id = ?", (str(target_uid),))
+            # Query format fix based on DB type
+            query_user = f"SELECT global_score, wins FROM users WHERE user_id = {ph}"
+            cur.execute(query_user, (target_uid,))
             row = cur.fetchone()
 
             if not row:
-                bot.send_message(room_id, f"🚫 @{target_user}, aapne abhi tak koi game nahi khela!")
+                bot.send_message(room_id, f"🚫 @{target_user}, aapka koi record nahi mila. Pehle game khelo!")
                 conn.close()
                 return True
 
             global_score, total_wins = row
 
             # B. Get Game-Specific Breakdown
-            cur.execute("SELECT game_name, wins, earnings FROM game_stats WHERE user_id = ?", (str(target_uid),))
+            query_games = f"SELECT game_name, wins, earnings FROM game_stats WHERE user_id = {ph}"
+            cur.execute(query_games, (target_uid,))
             game_rows = cur.fetchall()
 
             # C. Format Message
             msg = f"📊 **STATS: @{target_user}**\n"
-            msg += f"💰 **Wallet:** {global_score} Coins\n"
+            msg += f"💰 **Global Wallet:** {global_score} Coins\n"
             msg += f"🏆 **Total Wins:** {total_wins}\n"
             
             if game_rows:
-                msg += "\n**Game History:**\n"
+                msg += "────────────────\n"
                 for g_name, g_wins, g_earn in game_rows:
-                    # Emoji mapping based on game name
                     icon = "🎮"
                     if "ludo" in g_name: icon = "🎲"
                     elif "tic" in g_name: icon = "❌"
@@ -57,7 +60,7 @@ def handle_command(bot, command, room_id, user, args, data):
                     
                     msg += f"{icon} **{g_name.capitalize()}:** {g_earn} Coins ({g_wins} Wins)\n"
             else:
-                msg += "\n_(No specific game stats yet)_"
+                msg += "\n_(New Player)_"
 
             bot.send_message(room_id, msg)
             conn.close()
@@ -65,10 +68,10 @@ def handle_command(bot, command, room_id, user, args, data):
 
         except Exception as e:
             traceback.print_exc()
-            bot.send_message(room_id, "Error fetching stats.")
+            bot.send_message(room_id, f"Stats Error: {e}")
             return True
 
-    # --- 2. LEADERBOARD (!top, !leaderboard) ---
+    # --- 2. LEADERBOARD (!top) ---
     if cmd in ["top", "lb", "leaderboard"]:
         try:
             conn = db.get_connection()
@@ -80,7 +83,7 @@ def handle_command(bot, command, room_id, user, args, data):
             conn.close()
 
             if not rows:
-                bot.send_message(room_id, "📉 Leaderboard is empty.")
+                bot.send_message(room_id, "📉 Leaderboard khali hai.")
                 return True
 
             msg = "🏆 **GLOBAL LEADERBOARD** 🏆\n\n"
