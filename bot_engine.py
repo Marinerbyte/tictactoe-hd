@@ -15,7 +15,11 @@ class HowdiesBot:
         self.token = None; self.ws = None; self.user_data = {}
         self.user_id = None; self.active_rooms = []; self.logs = []
         self.running = False; self.start_time = time.time()
+        
+        # --- ROBUST DATA STORAGE ---
+        # Key: room_name, Value: {'id': '12345', 'users': [], 'chat_log': []}
         self.room_details = {}
+        
         init_db()
         self.plugins = PluginManager(self)
         self.log("Bot Initialized. Ready to connect.")
@@ -24,9 +28,10 @@ class HowdiesBot:
         entry = f"[{time.strftime('%X')}] {message}"
         print(entry)
         self.logs.append(entry)
-        if len(self.logs) > 150: self.logs.pop(0)
+        if len(self.logs) > 200: self.logs.pop(0)
 
     def login_api(self, username, password):
+        # ... (same as previous correct version)
         self.log(f"Attempting API login for {username}...")
         try:
             r = requests.post(API_URL, json={"username": username, "password": password}, timeout=10)
@@ -67,8 +72,26 @@ class HowdiesBot:
         try:
             data = json.loads(message)
             handler = data.get("handler")
-            room_name = data.get("roomid") or data.get("name")
+            
+            # --- DETAILED LOGGING FOR DEBUGGING ---
+            if handler not in ["userpresence", None]: # Ignore noisy presence updates
+                 self.log(f"RECV: {data}")
 
+            # Find room name using ID if name is not present
+            room_id_str = data.get("roomid")
+            room_name = None
+            if room_id_str:
+                for name, details in self.room_details.items():
+                    if str(details.get('id')) == str(room_id_str):
+                        room_name = name
+                        break
+            
+            # Fallback to name from payload
+            if not room_name:
+                room_name = data.get("name")
+
+
+            # --- ROBUST HANDLERS ---
             if handler == "chatroommessage":
                 if room_name and room_name in self.room_details:
                     author = data.get('username', 'Unknown')
@@ -91,31 +114,30 @@ class HowdiesBot:
             
             elif handler == "joinchatroom" and room_name:
                 users = [u.get('username') for u in data.get("users", [])]
-                self.room_details[room_name] = {'users': users, 'chat_log': []}
-                if room_name not in self.active_rooms: self.active_rooms.append(room_name)
-                self.log(f"SUCCESS: Joined '{room_name}'")
+                room_id = data.get("roomid")
+                
+                # Store everything: name, id, users, chat_log
+                self.room_details[room_name] = {'id': room_id, 'users': users, 'chat_log': []}
+                
+                if room_name not in self.active_rooms:
+                    self.active_rooms.append(room_name)
+                self.log(f"SUCCESS: Joined '{room_name}' (ID: {room_id})")
 
         except Exception as e:
             self.log(f"ERROR: on_message: {e}")
-
+    
+    # ... (other functions: on_error, on_close, send_json, etc. are the same and correct)
     def on_error(self, ws, error): self.log(f"ERROR: WebSocket: {error}")
     def on_close(self, ws, _, __):
         self.log("Connection Closed. Reconnecting...")
         if self.running: time.sleep(5); self.connect_ws()
-
     def send_json(self, data):
-        if self.ws and self.ws.sock and self.ws.sock.connected:
-            self.ws.send(json.dumps(data))
-        else: self.log("ERROR: Not connected, cannot send.")
-
+        if self.ws and self.ws.sock and self.ws.sock.connected: self.ws.send(json.dumps(data))
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
-    
     def join_room(self, room_name, password=""):
         self.log(f"Joining room '{room_name}'...")
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
-    
     def disconnect(self):
-        self.log("Disconnecting bot...")
-        self.running = False
+        self.log("Disconnecting bot..."); self.running = False
         if self.ws: self.ws.close()
