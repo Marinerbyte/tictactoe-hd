@@ -4,11 +4,13 @@ import io
 import requests
 import time
 from PIL import Image, ImageDraw, ImageFont
+from db import get_connection  # <--- NEW: Database Connection
 
 # --- CONFIGURATION ---
 MAX_PLAYERS = 4 
 FINISH_LINE = 39 
-TIMEOUT_SECONDS = 90 # 1.5 Minutes Inactivity Limit
+TIMEOUT_SECONDS = 90
+WIN_REWARD = 100 # <--- NEW: 100 Coins for winning
 
 HORSES_CONFIG = [
     {"name": "Bijli ⚡",   "url": "https://www.dropbox.com/scl/fi/5mxn0hancsdixl8o8qxv9/file_000000006d7871fdaee7d2e8f89d10ac.png?rlkey=tit3yzcn0dobpjy2p7g1hhr0z&st=7xyenect&dl=1"},
@@ -24,7 +26,28 @@ ACTIVE_GAMES = {}
 CACHED_IMAGES = {}
 BASE_BOARD_CACHE = None 
 
-# --- 1. IMAGE LOADER ---
+# --- 1. DB HELPER (NEW) ---
+def add_win_stats(user_id, username):
+    """Updates user score and wins in DB"""
+    if user_id == "BOT": return
+    
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # Ensure user exists
+        cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (str(user_id), username))
+        
+        # Update Score and Win Count
+        cur.execute("UPDATE users SET global_score = global_score + ?, wins = wins + 1 WHERE user_id = ?", (WIN_REWARD, str(user_id)))
+        
+        conn.commit()
+        conn.close()
+        print(f"[DB] Awarded {WIN_REWARD} points to {username}")
+    except Exception as e:
+        print(f"[DB Error] {e}")
+
+# --- 2. IMAGE LOADER ---
 def get_horse_image(index):
     url = HORSES_CONFIG[index]["url"]
     if url not in CACHED_IMAGES:
@@ -39,13 +62,12 @@ def get_horse_image(index):
             return None
     return CACHED_IMAGES.get(url)
 
-# --- 2. BOARD MAPPING ---
+# --- 3. BOARD MAPPING ---
 def get_coordinates(step):
     row = step // 10
     col = step % 10
     start_x, start_y = 50, 80
     box_w, box_h = 75, 90
-    
     if row % 2 == 0: x = start_x + (col * box_w)
     else: x = start_x + ((9 - col) * box_w)
     y = start_y + (row * box_h)
@@ -118,7 +140,7 @@ def generate_board_image(players, current_msg=""):
     output.seek(0)
     return output
 
-# --- 3. GAME LOGIC ---
+# --- 4. GAME LOGIC ---
 class LudoGame:
     def __init__(self, host_id, mode):
         self.host_id = host_id
@@ -126,14 +148,13 @@ class LudoGame:
         self.state = 'waiting'
         self.players = [] 
         self.turn_idx = 0
-        self.last_active = time.time() # Timestamp for Cleanup
+        self.last_active = time.time()
         
         available_indices = list(range(len(HORSES_CONFIG)))
         random.shuffle(available_indices)
         self.deck = available_indices[:MAX_PLAYERS]
 
     def refresh(self):
-        """Reset the inactivity timer"""
         self.last_active = time.time()
 
     def add_player(self, uid, name):
@@ -152,42 +173,35 @@ class LudoGame:
         self.turn_idx = (self.turn_idx + 1) % len(self.players)
         return self.players[self.turn_idx]
 
-# --- 4. CLEANUP SYSTEM ---
+# --- 5. CLEANUP ---
 def setup(bot):
-    """Called by plugin_loader to start background tasks"""
     t = threading.Thread(target=cleanup_loop, args=(bot,), daemon=True)
     t.start()
 
 def cleanup_loop(bot):
     while True:
-        time.sleep(10) # Check every 10 seconds
+        time.sleep(10)
         now = time.time()
         to_remove = []
-        
         with GAME_LOCK:
             for room_id, game in ACTIVE_GAMES.items():
                 if now - game.last_active > TIMEOUT_SECONDS:
                     to_remove.append(room_id)
-            
             for room_id in to_remove:
                 del ACTIVE_GAMES[room_id]
-                try:
-                    bot.send_message(room_id, "⏰ **Game Timeout!** Sab soo gaye, isliye race cancel kar di.")
-                except:
-                    pass
+                try: bot.send_message(room_id, "⏰ Game Timeout! Sab soo gaye.")
+                except: pass
 
-# --- 5. COMMAND HANDLER ---
+# --- 6. COMMAND HANDLER ---
 def handle_command(bot, command, room_id, user, args, data):
     user_id = data.get('userid', user)
 
-    # A. START RACE
     if command == "race":
         mode = args[0] if args else "1"
         with GAME_LOCK:
             if room_id in ACTIVE_GAMES:
                 bot.send_message(room_id, "⚠️ Ek race pehle se chal rahi hai!")
                 return True
-            
             game = LudoGame(user_id, mode)
             h_idx = game.add_player(user_id, user)
             h_name = HORSES_CONFIG[h_idx]["name"]
@@ -196,99 +210,89 @@ def handle_command(bot, command, room_id, user, args, data):
             if mode == "1":
                 game.add_player("BOT", "Computer 🤖")
                 game.state = 'playing'
-                # Generate Board
-                # img = generate_board_image(game.players, "VS COMPUTER")
-                # bot.send_image(room_id, img)
                 bot.send_message(room_id, f"⚔️ **1v1 Race Started!**\n@{user} ({h_name}) VS Computer.\nType `!roll` to move!")
             else:
-                bot.send_message(room_id, f"🏆 **Lobby Open! (Max 4)**\nHost: @{user} ({h_name})\n\nType `!join` to enter.\nHost type `!start`.")
+                bot.send_message(room_id, f"🏆 **Lobby Open! (Max 4)**\nHost: @{user} ({h_name})\nType `!join` to enter.\nHost type `!start`.")
         return True
 
-    # B. JOIN
     if command == "join":
         with GAME_LOCK:
             game = ACTIVE_GAMES.get(room_id)
             if not game or game.mode != "2" or game.state != "waiting":
                 bot.send_message(room_id, "Koi open lobby nahi hai.")
                 return True
-            
             if any(p['uid'] == user_id for p in game.players):
                 bot.send_message(room_id, "Aap already join ho.")
                 return True
-            
             if len(game.players) >= MAX_PLAYERS:
-                bot.send_message(room_id, f"Housefull! Sirf {MAX_PLAYERS} log khel sakte hain.")
+                bot.send_message(room_id, f"Housefull!")
                 return True
-
             h_idx = game.add_player(user_id, user)
             h_name = HORSES_CONFIG[h_idx]["name"]
             bot.send_message(room_id, f"✅ @{user} joined with **{h_name}**")
         return True
 
-    # C. START GAME
     if command == "start":
         with GAME_LOCK:
             game = ACTIVE_GAMES.get(room_id)
             if not game or game.state != "waiting": return True
-            if game.host_id != user_id:
-                bot.send_message(room_id, "Sirf Host start kar sakta hai.")
-                return True
+            if game.host_id != user_id: return True
             if len(game.players) < 2:
-                bot.send_message(room_id, "Kam se kam 2 players chahiye.")
+                bot.send_message(room_id, "Need 2+ players.")
                 return True
-            
             game.state = 'playing'
             game.refresh()
             p1 = game.get_current_player()
             bot.send_message(room_id, f"🚦 **RACE STARTED!** 🚦\nPahli baari: @{p1['name']}\nType `!roll`")
         return True
 
-    # D. ROLL
     if command == "roll":
         if room_id not in ACTIVE_GAMES: return False
-
         with GAME_LOCK:
             game = ACTIVE_GAMES[room_id]
             if game.state != 'playing': return True
-            
             curr = game.get_current_player()
-            
             if curr['uid'] == "BOT" and user_id != "BOT": return True
             if curr['uid'] != user_id and curr['uid'] != "BOT":
-                bot.send_message(room_id, f"Ruko! Abhi @{curr['name']} ki baari hai.")
+                bot.send_message(room_id, f"Wait! @{curr['name']}'s turn.")
                 return True
 
-            # Reset Timer
             game.refresh()
-
-            # Roll Dice
             dice = random.randint(1, 6)
             curr['pos'] += dice
-            
             msg = f"🎲 @{curr['name']} rolled **{dice}**! (Pos: {curr['pos']})"
             
+            # --- WINNER CHECK ---
             if curr['pos'] >= FINISH_LINE:
                 curr['pos'] = FINISH_LINE
-                # Winner Board
-                # img = generate_board_image(game.players, f"WINNER: {curr['name']}")
-                # bot.send_image(room_id, img)
-                bot.send_message(room_id, f"🎉🏆 **{curr['name']} WINS THE RACE!** 🏆🎉")
+                
+                # 1. Update DB (Points Logic)
+                if curr['uid'] != "BOT":
+                    add_win_stats(curr['uid'], curr['name'])
+                    win_msg = f"🎉🏆 **{curr['name']} WINS (+{WIN_REWARD} Coins)!** 🏆🎉"
+                else:
+                    win_msg = f"🤖 **Computer Wins!** Better luck next time."
+
+                bot.send_message(room_id, win_msg)
+                
+                # Placeholder: If you want to show final board
+                # img = generate_board_image(game.players, "WINNER!")
+                # bot.send_image(img) 
+
                 del ACTIVE_GAMES[room_id]
                 return True
 
             bot.send_message(room_id, msg)
             next_p = game.next_turn()
             
-            # Bot Auto Move
             if next_p['uid'] == "BOT":
-                bot.send_message(room_id, "🤖 Computer soch raha hai...")
+                bot.send_message(room_id, "🤖 Computer rolling...")
                 def bot_move():
                     time.sleep(2)
                     handle_command(bot, "roll", room_id, "BOT", [], {})
                 threading.Thread(target=bot_move).start()
             else:
-                bot.send_message(room_id, f"👉 Ab @{next_p['name']} ki baari hai. Type `!roll`")
-
+                bot.send_message(room_id, f"👉 @{next_p['name']}'s turn.")
         return True
 
     return False
