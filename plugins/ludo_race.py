@@ -6,9 +6,10 @@ import sys
 import os
 import threading
 import traceback
+import uuid  # <--- NEW: Message ID ke liye zaroori
 from PIL import Image, ImageDraw, ImageFont
 
-# --- DB IMPORT (Same as TicTacToe) ---
+# --- DB IMPORT ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     import db
@@ -50,7 +51,7 @@ def game_cleanup_loop():
         to_remove = []
         with games_lock:
             for room_id, game in games.items():
-                if now - game.last_interaction > 120: # 2 Mins timeout
+                if now - game.last_interaction > 120: 
                     to_remove.append(room_id)
         for room_id in to_remove:
             if BOT_INSTANCE:
@@ -70,35 +71,29 @@ def get_font(size):
         except: continue
     return ImageFont.load_default()
 
-# Update DB (Global + Game Stats)
 def update_stats(user_id, username):
     if user_id == "BOT": return
     conn = db.get_connection()
     if not conn: return
     cur = conn.cursor()
     try:
-        # 1. Global Score
         try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, username))
         except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, username))
-        
         q1 = "UPDATE users SET global_score = global_score + %s, wins = wins + 1 WHERE user_id = %s"
         if not db.DATABASE_URL.startswith("postgres"): q1 = "UPDATE users SET global_score = global_score + ?, wins = wins + 1 WHERE user_id = ?"
         cur.execute(q1, (WIN_REWARD, user_id))
 
-        # 2. Game Stats (Ludo)
         try: cur.execute("INSERT INTO game_stats (user_id, game_name, wins, earnings) VALUES (%s, 'ludo', 0, 0) ON CONFLICT (user_id, game_name) DO NOTHING", (user_id,))
         except: cur.execute("INSERT OR IGNORE INTO game_stats (user_id, game_name, wins, earnings) VALUES (?, 'ludo', 0, 0)", (user_id,))
-        
         q2 = "UPDATE game_stats SET wins = wins + 1, earnings = earnings + %s WHERE user_id = %s AND game_name = 'ludo'"
         if not db.DATABASE_URL.startswith("postgres"): q2 = "UPDATE game_stats SET wins = wins + 1, earnings = earnings + ? WHERE user_id = ? AND game_name = 'ludo'"
         cur.execute(q2, (WIN_REWARD, user_id))
-        
         conn.commit()
     except Exception as e:
         print(f"DB Error: {e}")
     finally: conn.close()
 
-# --- IMAGE UPLOAD (EXACTLY LIKE TICTACTOE) ---
+# --- IMAGE UPLOAD (TicTacToe Logic) ---
 def upload_image(bot, image, room_id):
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='PNG')
@@ -230,28 +225,22 @@ def handle_command(bot, command, room_id, user, args, data):
             if current_game:
                 bot.send_message(room_id, "⚠️ Race already running! Type 'stop'.")
                 return True
-            
-            # Default to Mode 1 if not specified
             mode = "1"
             if len(args) > 0: mode = args[0]
-
             with games_lock: 
                 game = LudoGame(user_id, mode)
                 h = game.add_player(user_id, user)
                 games[room_id] = game
-            
             h_name = HORSES_CONFIG[h]["name"]
             
             if mode == "1":
-                # Single Player
                 game.add_player("BOT", "Bot 🤖")
                 game.state = 'playing'
                 img = draw_game_state(game.players, "1v1 STARTED! Type !roll")
                 link = upload_image(bot, img, room_id)
-                bot.send_message(room_id, f"⚔️ **1v1 Race!**\n@{user} ({h_name}) VS Bot.\nType `!roll`")
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "rc_s"})
+                bot.send_message(room_id, f"⚔️ **1v1 Race!**\n@{user} ({h_name}) VS Bot.")
+                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Start", "id": uuid.uuid4().hex})
             else:
-                # Multiplayer
                 bot.send_message(room_id, f"🏆 **Lobby Open! (Max 4)**\nHost: @{user} ({h_name})\nType `!join` to enter.\nHost type `!start`.")
             return True
 
@@ -268,9 +257,7 @@ def handle_command(bot, command, room_id, user, args, data):
             # JOIN
             if cmd_clean == "join" and game.state == 'waiting':
                 if any(p['uid'] == user_id for p in game.players): return True
-                if len(game.players) >= MAX_PLAYERS: 
-                    bot.send_message(room_id, "Housefull!"); return True
-                
+                if len(game.players) >= MAX_PLAYERS: bot.send_message(room_id, "Housefull!"); return True
                 h = game.add_player(user_id, user)
                 bot.send_message(room_id, f"✅ @{user} joined ({HORSES_CONFIG[h]['name']})")
                 return True
@@ -278,62 +265,69 @@ def handle_command(bot, command, room_id, user, args, data):
             # START
             if cmd_clean == "start" and game.state == 'waiting':
                 if game.host_id != user_id: return True
-                if len(game.players) < 2: 
-                    bot.send_message(room_id, "Need 2+ players."); return True
-                
+                if len(game.players) < 2: bot.send_message(room_id, "Need 2+ players."); return True
                 game.state = 'playing'
                 game.touch()
                 img = draw_game_state(game.players, "RACE STARTED! First Turn")
                 link = upload_image(bot, img, room_id)
                 p1 = game.get_current_player()
                 bot.send_message(room_id, f"🚦 **GO!** @{p1['name']}'s turn (`!roll`)")
-                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board", "id": "rc_st"})
+                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Go", "id": uuid.uuid4().hex})
                 return True
 
-            # ROLL
+            # ROLL (UPDATED: Sends image EVERY time)
             if cmd_clean == "roll" and game.state == 'playing':
                 curr = game.get_current_player()
-                
-                # Check Turn
-                if curr['uid'] == "BOT" and user_id != "BOT": return True # Bot turn, user can't play
-                if curr['uid'] != user_id and curr['uid'] != "BOT": 
-                    # bot.send_message(room_id, f"Wait for @{curr['name']}") # Optional spam prevention
-                    return True
+                if curr['uid'] == "BOT" and user_id != "BOT": return True 
+                if curr['uid'] != user_id and curr['uid'] != "BOT": return True
                 
                 game.touch()
                 dice = random.randint(1, 6)
                 curr['pos'] += dice
                 
-                msg = f"🎲 @{curr['name']} rolled {dice}!"
+                # 1. Update Board & Generate Image
+                msg_text = f"🎲 @{curr['name']} rolled {dice}!"
                 
-                # Check Win
+                # Check Win First to set correct message
+                is_winner = False
                 if curr['pos'] >= FINISH_LINE:
                     curr['pos'] = FINISH_LINE
+                    is_winner = True
+                    msg_text = f"🏆 WINNER: {curr['name']}!"
+
+                # 2. Upload & Send Image (EVERY TURN)
+                img = draw_game_state(game.players, msg_text)
+                link = upload_image(bot, img, room_id)
+                
+                if link: 
+                    # Send IMAGE to chat
+                    bot.send_json({
+                        "handler": "chatroommessage", 
+                        "roomid": room_id, 
+                        "type": "image", 
+                        "url": link, 
+                        "text": f"Roll: {dice}", 
+                        "id": uuid.uuid4().hex
+                    })
+                else:
+                    # Fallback Text
+                    bot.send_message(room_id, msg_text)
+
+                # 3. Handle End Game or Next Turn
+                if is_winner:
                     update_stats(curr['uid'], curr['name'])
-                    
-                    img = draw_game_state(game.players, f"WINNER: {curr['name']}!")
-                    link = upload_image(bot, img, room_id)
-                    
-                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Win", "id": "rc_w"})
                     bot.send_message(room_id, f"🎉🏆 **{curr['name']} WINS (+{WIN_REWARD} Coins)!** 🏆🎉")
-                    
                     with games_lock: del games[room_id]
                     return True
                 
-                bot.send_message(room_id, msg)
-                
-                # Next Turn
                 next_p = game.next_turn()
                 
-                # IF NEXT IS BOT -> Auto Move
+                # Auto Bot Move
                 if next_p['uid'] == "BOT":
                     def bot_move():
-                        time.sleep(2) # Fake thinking time
+                        time.sleep(1.5) 
                         handle_command(bot, "roll", room_id, "BOT", [], {"userid": "BOT"})
                     threading.Thread(target=bot_move).start()
-                else:
-                    # Optional: Send Board Image every turn (Can be spammy, maybe every 2 turns?)
-                    pass 
 
                 return True
 
