@@ -1,8 +1,9 @@
 import sys
 import os
 import threading
+import traceback
 
-# Root folder se 'db.py' import karne ka setup
+# --- DB IMPORT ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     import db
@@ -10,77 +11,93 @@ except Exception as e:
     print(f"DB Import Error: {e}")
 
 def handle_command(bot, command, room_id, user, args, data):
-    """
-    Commands:
-    !score / !coins - Check Balance & Wins
-    !top  - Leaderboard
-    !free - Get 100 free coins (Once per day logic can be added later)
-    """
-    
-    cmd_clean = command.lower().strip()
-    
-    # Database Connection
-    conn = db.get_connection()
-    if not conn: return False
-    cur = conn.cursor()
+    user_id = data.get('userid', user)
+    cmd = command.lower().strip()
 
-    # Ensure user exists in DB
-    try:
-        # Postgres syntax
-        try:
-            cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user, user))
-        except:
-            # SQLite syntax
-            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user, user))
-        conn.commit()
-    except:
-        pass
+    # --- 1. VIEW SCORE (!score, !balance, !bal) ---
+    if cmd in ["score", "balance", "bal", "coins", "stats"]:
+        
+        # Agar user kisi aur ka score dekhna chahe (!score @username)
+        # (Abhi ke liye simple rakhte hain, sirf apna score)
+        target_user = user
+        target_uid = user_id
 
-    # --- COMMAND: !SCORE / !COINS ---
-    if cmd_clean in ["score", "coins", "bal", "balance"]:
         try:
-            query = "SELECT global_score, wins FROM users WHERE user_id = %s"
-            if not db.DATABASE_URL.startswith("postgres"): query = "SELECT global_score, wins FROM users WHERE user_id = ?"
-            
-            cur.execute(query, (user,))
+            conn = db.get_connection()
+            cur = conn.cursor()
+
+            # A. Get Global Stats
+            cur.execute("SELECT global_score, wins FROM users WHERE user_id = ?", (str(target_uid),))
             row = cur.fetchone()
-            
-            score = row[0] if row else 0
-            wins = row[1] if row else 0
-            
-            msg = f"💳 **@{user}** Wallet:\n💰 Coins: **{score}**\n🏆 Wins: **{wins}**"
-            bot.send_message(room_id, msg)
-            return True
-        except Exception as e:
-            print(f"Score Error: {e}")
 
-    # --- COMMAND: !TOP (Leaderboard) ---
-    if cmd_clean == "top":
+            if not row:
+                bot.send_message(room_id, f"🚫 @{target_user}, aapne abhi tak koi game nahi khela!")
+                conn.close()
+                return True
+
+            global_score, total_wins = row
+
+            # B. Get Game-Specific Breakdown
+            cur.execute("SELECT game_name, wins, earnings FROM game_stats WHERE user_id = ?", (str(target_uid),))
+            game_rows = cur.fetchall()
+
+            # C. Format Message
+            msg = f"📊 **STATS: @{target_user}**\n"
+            msg += f"💰 **Wallet:** {global_score} Coins\n"
+            msg += f"🏆 **Total Wins:** {total_wins}\n"
+            
+            if game_rows:
+                msg += "\n**Game History:**\n"
+                for g_name, g_wins, g_earn in game_rows:
+                    # Emoji mapping based on game name
+                    icon = "🎮"
+                    if "ludo" in g_name: icon = "🎲"
+                    elif "tic" in g_name: icon = "❌"
+                    elif "race" in g_name: icon = "🐎"
+                    
+                    msg += f"{icon} **{g_name.capitalize()}:** {g_earn} Coins ({g_wins} Wins)\n"
+            else:
+                msg += "\n_(No specific game stats yet)_"
+
+            bot.send_message(room_id, msg)
+            conn.close()
+            return True
+
+        except Exception as e:
+            traceback.print_exc()
+            bot.send_message(room_id, "Error fetching stats.")
+            return True
+
+    # --- 2. LEADERBOARD (!top, !leaderboard) ---
+    if cmd in ["top", "lb", "leaderboard"]:
         try:
-            cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 5")
+            conn = db.get_connection()
+            cur = conn.cursor()
+
+            # Top 10 Richest Users
+            cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 10")
             rows = cur.fetchall()
-            
-            msg = "🏆 **RICH LIST** 🏆\n"
-            for i, row in enumerate(rows):
-                medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
-                msg += f"{medal} {row[0]}: {row[1]}\n"
-            
+            conn.close()
+
+            if not rows:
+                bot.send_message(room_id, "📉 Leaderboard is empty.")
+                return True
+
+            msg = "🏆 **GLOBAL LEADERBOARD** 🏆\n\n"
+            for idx, (name, score) in enumerate(rows):
+                rank = idx + 1
+                icon = "🔹"
+                if rank == 1: icon = "🥇"
+                elif rank == 2: icon = "🥈"
+                elif rank == 3: icon = "🥉"
+                
+                msg += f"{icon} **{name}**: {score}\n"
+
             bot.send_message(room_id, msg)
             return True
+
         except Exception as e:
-            print(f"Top Error: {e}")
-
-    # --- COMMAND: !FREE (Testing Money) ---
-    if cmd_clean == "free":
-        try:
-            query = "UPDATE users SET global_score = global_score + 1000 WHERE user_id = %s"
-            if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET global_score = global_score + 1000 WHERE user_id = ?"
-            
-            cur.execute(query, (user,))
-            conn.commit()
-            bot.send_message(room_id, f"💰 @{user} received **1000 Free Coins**!")
+            traceback.print_exc()
             return True
-        except: pass
 
-    conn.close()
     return False
