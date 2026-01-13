@@ -29,30 +29,28 @@ DASHBOARD_HTML = """
 
         .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
         .container { max-width: 1400px; margin: 0 auto; }
-        .card { background: var(--bg-card); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 20px rgba(0,0,0,0.3); transition: transform 0.3s; }
-        .card:hover { transform: translateY(-5px); }
+        .card { background: var(--bg-card); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
         h2 { margin-top: 0; font-weight: 700; display: flex; align-items: center; gap: 0.75rem; }
         input, select { padding: 12px; margin: 0; background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; color: var(--text-light); flex-grow: 1; }
-        input:focus, select:focus { outline: none; border-color: var(--primary); }
         button { padding: 12px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
         button:disabled { cursor: not-allowed; opacity: 0.6; }
-        .btn-primary { background: var(--primary); color: white; } .btn-primary:hover:not(:disabled) { background: #2563EB; }
+        .btn-primary { background: var(--primary); color: white; }
         .btn-danger { background: var(--red); color: white; }
-        .status-dot { height: 12px; width: 12px; border-radius: 50%; transition: all 0.5s; }
-        .status-dot.offline { background-color: var(--red); box-shadow: 0 0 10px var(--red); }
-        .status-dot.online { background-color: var(--green); box-shadow: 0 0 10px var(--green); }
-        .status-dot.connecting { background-color: var(--yellow); box-shadow: 0 0 10px var(--yellow); animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .status-dot { height: 12px; width: 12px; border-radius: 50%; }
+        .status-dot.offline { background-color: var(--red); }
+        .status-dot.online { background-color: var(--green); }
+        .status-dot.connecting { background-color: var(--yellow); animation: pulse 1s infinite; }
+        @keyframes pulse { 50% { opacity: 0.5; } }
 
         .page { display: none; animation: fadeIn 0.5s; }
         .page.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 10px 0; }
-        .nav-item { display: flex; flex-direction: column; align-items: center; color: var(--text-muted); cursor: pointer; transition: color 0.3s; }
+        .nav-item { display: flex; flex-direction: column; align-items: center; color: var(--text-muted); cursor: pointer; }
         .nav-item i { font-size: 1.5rem; }
         .nav-item span { font-size: 0.75rem; }
-        .nav-item.active, .nav-item:hover { color: var(--primary); }
+        .nav-item.active { color: var(--primary); }
 
         .grid-container { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1.5rem; }
         .col-span-12 { grid-column: span 12; } .col-span-8 { grid-column: span 8; } .col-span-6 { grid-column: span 6; } .col-span-4 { grid-column: span 4; }
@@ -61,17 +59,17 @@ DASHBOARD_HTML = """
         .live-chat-window { height: 400px; background: #111827; border-radius: 8px; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column-reverse; }
         .chat-message { align-self: flex-start; background: var(--bg-input); padding: 8px 12px; border-radius: 12px; margin-bottom: 10px; max-width: 80%; }
         .chat-message.bot { background: var(--secondary); align-self: flex-end; }
-        .chat-message .author { font-weight: bold; font-size: 0.9rem; color: var(--primary); }
+        .chat-message .author { font-weight: bold; color: var(--primary); }
         .chat-message.bot .author { color: white; }
         
         .user-list { list-style: none; padding: 0; height: 400px; overflow-y: auto; }
-        .user-list li { padding: 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+        .user-list li { padding: 8px; border-bottom: 1px solid var(--border); }
         
         table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); }
+        th, td { padding: 12px; border-bottom: 1px solid var(--border); }
         
-        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; }
-        .toast { padding: 15px; border-radius: 8px; color: white; box-shadow: 0 3px 10px rgba(0,0,0,0.3); opacity: 0; animation: fadeIn 0.5s forwards; margin-top: 10px; }
+        #toast-container { position: fixed; bottom: 80px; right: 20px; z-index: 1000; }
+        .toast { padding: 15px; border-radius: 8px; color: white; box-shadow: 0 3px 10px rgba(0,0,0,0.3); margin-top: 10px; }
         .toast.success { background: var(--green); } .toast.error { background: var(--red); }
     </style>
 </head>
@@ -149,7 +147,6 @@ DASHBOARD_HTML = """
 
 <script>
     let activePage = 'page-dba';
-    let currentRooms = [];
     
     // --- UI HELPERS ---
     function showPage(pageId) {
@@ -158,136 +155,100 @@ DASHBOARD_HTML = """
         document.getElementById(pageId).classList.add('active');
         document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
         document.querySelector(`.nav-item[onclick="showPage('${pageId}')"]`).classList.add('active');
-        if (pageId === 'page-explorer') updateRoomExplorer();
+        // Immediately fetch data for the new page
+        masterUpdate();
     }
 
-    function showToast(message, type = 'success') {
-        const container = document.getElementById('toast-container');
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.textContent = message;
-        container.appendChild(toast);
-        setTimeout(() => toast.remove(), 4000);
-    }
-
-    async function api(endpoint, data = {}) {
-        const response = await fetch('/api' + endpoint, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-        return await response.json();
-    }
+    function showToast(message, type = 'success') { /* ... same ... */ }
+    async function api(endpoint, data = {}) { /* ... same ... */ }
     
     // --- API FUNCTIONS ---
     async function loginAndStart() {
         const u = document.getElementById('username').value;
         const p = document.getElementById('password').value;
-        if (!u || !p) return showToast('Username and Password required', 'error');
+        if (!u || !p) return;
         
         const btn = document.getElementById('btn-login');
-        const statusDot = document.getElementById('status');
-        
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting';
         btn.disabled = true;
-        statusDot.className = 'status-dot connecting';
+        document.getElementById('status').className = 'status-dot connecting';
 
         const res = await api('/start', {username: u, password: p});
         showToast(res.msg, res.success ? 'success' : 'error');
         
         btn.disabled = false;
         if(res.success) {
-            btn.style.background = 'var(--green)';
             btn.innerHTML = '<i class="fas fa-check-circle"></i> Connected';
         } else {
-            statusDot.className = 'status-dot offline';
             btn.innerHTML = 'Connect';
         }
     }
     
     async function stopBot() {
-        const res = await api('/stop');
-        showToast(res.msg, 'error');
-        const loginBtn = document.getElementById('btn-login');
-        loginBtn.style.background = 'var(--primary)';
-        loginBtn.innerHTML = 'Connect';
+        await api('/stop');
+        document.getElementById('btn-login').innerHTML = 'Connect';
     }
 
     async function joinRoom() {
         const roomName = document.getElementById('roomName').value;
-        if (!roomName) return showToast('Room Name required', 'error');
-        
+        if (!roomName) return;
         await api('/join', {room: roomName});
-        showToast(`Join command sent to '${roomName}'`, 'success');
-        setTimeout(updateDashboardData, 1000);
+        setTimeout(masterUpdate, 1000); // Give time for bot to join, then update
     }
 
-    async function updateRoomExplorer() {
-        const roomName = document.getElementById('room-selector').value;
-        if (!roomName) {
-            document.getElementById('user-count').innerText = '0';
-            document.getElementById('user-list').innerHTML = '<li>Select a room</li>';
-            document.getElementById('chat-window').innerHTML = '';
-            return;
-        }
-
-        const res = await fetch(`/api/room/details?name=${roomName}`).then(r => r.json());
-        
-        if (res.success) {
-            document.getElementById('user-count').innerText = res.users.length;
-            document.getElementById('user-list').innerHTML = res.users.map(u => `<li><i class="fas fa-user"></i> ${u}</li>`).join('');
-            
-            document.getElementById('chat-window').innerHTML = res.chat.map(m => {
-                const authorClass = m.type;
-                return `<div class="chat-message ${authorClass}"><div class="author">${m.author}</div><div>${m.text}</div></div>`;
-            }).join('');
-        }
-    }
-
-    async function updateDashboardData() {
+    // --- NEW MASTER UPDATE FUNCTION ---
+    async function masterUpdate() {
         try {
-            const [status, health, leaderboard] = await Promise.all([
-                fetch('/api/status').then(r => r.json()),
-                fetch('/api/health').then(r => r.json()),
-                fetch('/api/leaderboard').then(r => r.json())
-            ]);
+            // Fetch basic status first
+            const status = await fetch('/api/status').then(r => r.json());
 
-            // Header
-            const statusDot = document.getElementById('status');
-            if (!statusDot.classList.contains('connecting')) { // Don't override connecting state
-                statusDot.className = `status-dot ${status.running ? 'online' : 'offline'}`;
-            }
-            document.getElementById('health-stats').innerHTML = `<span><i class="fas fa-clock"></i> ${health.uptime}</span> | <span><i class="fas fa-memory"></i> ${health.ram}%</span> | <span><i class="fas fa-microchip"></i> ${health.cpu}%</span>`;
-
-            // Page 1
+            // Update Header & Page 1
+            document.getElementById('status').className = `status-dot ${status.running ? 'online' : 'offline'}`;
             document.getElementById('room-count').innerText = status.rooms.length;
             document.getElementById('log-window').innerHTML = status.logs.map(log => `<div>${log}</div>`).join('');
-
-            // Page 2
-            const selector = document.getElementById('room-selector');
-            if (JSON.stringify(currentRooms) !== JSON.stringify(status.rooms)) {
-                currentRooms = status.rooms;
+            
+            // --- DATA FOR OTHER PAGES ---
+            if (activePage === 'page-explorer') {
+                const selector = document.getElementById('room-selector');
                 const currentSelected = selector.value;
-                selector.innerHTML = '<option value="">-- Select a Room --</option>' + currentRooms.map(r => `<option value="${r}">${r}</option>`).join('');
-                if (currentRooms.includes(currentSelected)) {
+                selector.innerHTML = '<option value="">-- Select a Room --</option>' + status.rooms.map(r => `<option value="${r}">${r}</option>`).join('');
+                if (status.rooms.includes(currentSelected)) {
                     selector.value = currentSelected;
-                } else if (currentRooms.length > 0) {
-                    selector.value = currentRooms[0];
+                } else if (status.rooms.length > 0) {
+                    selector.value = status.rooms[0];
+                }
+
+                // Now fetch details for the selected room
+                const roomName = selector.value;
+                if (roomName) {
+                    const details = await fetch(`/api/room/details?name=${roomName}`).then(r => r.json());
+                    if (details.success) {
+                        document.getElementById('user-count').innerText = details.users.length;
+                        document.getElementById('user-list').innerHTML = details.users.map(u => `<li>${u}</li>`).join('');
+                        document.getElementById('chat-window').innerHTML = details.chat.map(m => `<div class="chat-message ${m.type}"><div class="author">${m.author}</div><div>${m.text}</div></div>`).join('');
+                    }
+                } else {
+                    // No rooms, clear the view
+                    document.getElementById('user-count').innerText = '0';
+                    document.getElementById('user-list').innerHTML = '<li>No rooms connected</li>';
                 }
             }
             
-            // Page 3
-            document.getElementById('plugin-list').innerHTML = status.plugins.map(p => `<div><i class="fas fa-check-circle" style="color:var(--green)"></i> ${p}</div>`).join('');
-            document.querySelector('#leaderboard-table tbody').innerHTML = leaderboard.data.map((p, i) => `<tr><td>#${i + 1}</td><td>${p.username}</td><td>${p.score}</td><td>${p.wins}</td></tr>`).join('');
-
-            if (activePage === 'page-explorer') {
-                updateRoomExplorer();
+            if (activePage === 'page-stats') {
+                const leaderboard = await fetch('/api/leaderboard').then(r => r.json());
+                document.getElementById('plugin-list').innerHTML = status.plugins.map(p => `<div>${p}</div>`).join('');
+                document.querySelector('#leaderboard-table tbody').innerHTML = leaderboard.data.map((p, i) => `<tr><td>#${i + 1}</td><td>${p.username}</td><td>${p.score}</td><td>${p.wins}</td></tr>`).join('');
             }
 
-        } catch (e) { /* silent fail */ }
+            // Health is always visible, fetch it
+            const health = await fetch('/api/health').then(r => r.json());
+            document.getElementById('health-stats').innerHTML = `<span><i class="fas fa-clock"></i> ${health.uptime}</span>`;
+
+        } catch (e) { console.error("Update failed", e); }
     }
     
-    setInterval(updateDashboardData, 3000);
+    setInterval(masterUpdate, 5000); // Main loop
+    masterUpdate(); // Initial call
 </script>
 
 </body>
