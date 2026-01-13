@@ -1,6 +1,7 @@
 import sys
 import os
 import traceback
+import math
 
 # --- DB IMPORT ---
 try:
@@ -9,92 +10,136 @@ try:
 except Exception as e:
     print(f"DB Import Error: {e}")
 
-def handle_command(bot, command, room_id, user, args, data):
-    user_id = data.get('userid', user) # Prefer UserID, fallback to Username
-    cmd = command.lower().strip()
+# --- FONT CONVERTER ---
+def fancy(text):
+    """Converts text to Small Caps"""
+    normal = "abcdefghijklmnopqrstuvwxyz"
+    small  = "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ"
+    trans = str.maketrans(normal, small)
+    return text.lower().translate(trans)
 
-    # --- SQL PLACEHOLDER DETECTION ---
-    # Postgres ke liye '%s', SQLite ke liye '?'
+# --- RANK SYSTEM ---
+def get_rank(score):
+    if score < 500: return "🥚 ɴᴇᴡʙɪᴇ"
+    elif score < 2000: return "💸 ʜᴜsᴛʟᴇʀ"
+    elif score < 5000: return "🛡️ ᴡᴀʀʀɪᴏʀ"
+    elif score < 10000: return "🎩 ʙᴏss"
+    elif score < 50000: return "👑 ᴋɪɴɢ"
+    else: return "💎 ᴇᴍᴘᴇʀᴏʀ"
+
+def handle_command(bot, command, room_id, user, args, data):
+    user_id = data.get('userid', user) 
+    cmd = command.lower().strip()
     ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
 
-    # --- 1. VIEW SCORE (!score, !balance) ---
-    if cmd in ["score", "balance", "bal", "coins", "stats"]:
-        
-        target_user = user
-        target_uid = str(user_id) # Ensure String format
+    # --- 1. VIEW SCORE ---
+    if cmd in ["score", "balance", "bal", "coins", "stats", "profile"]:
+        target_uid = str(user_id)
+        target_name = user
 
         try:
             conn = db.get_connection()
             cur = conn.cursor()
 
-            # A. Get Global Stats
-            # Query format fix based on DB type
-            query_user = f"SELECT global_score, wins FROM users WHERE user_id = {ph}"
-            cur.execute(query_user, (target_uid,))
+            # Get Global Stats
+            cur.execute(f"SELECT global_score, wins FROM users WHERE user_id = {ph}", (target_uid,))
             row = cur.fetchone()
 
             if not row:
-                bot.send_message(room_id, f"🚫 @{target_user}, aapka koi record nahi mila. Pehle game khelo!")
-                conn.close()
-                return True
+                # Auto-Register
+                try:
+                    cur.execute(f"INSERT INTO users (user_id, username, global_score, wins) VALUES ({ph}, {ph}, 0, 0)", (target_uid, target_name))
+                    conn.commit()
+                    global_score, total_wins = 0, 0
+                except:
+                    return True
+            else:
+                global_score, total_wins = row
 
-            global_score, total_wins = row
-
-            # B. Get Game-Specific Breakdown
-            query_games = f"SELECT game_name, wins, earnings FROM game_stats WHERE user_id = {ph}"
-            cur.execute(query_games, (target_uid,))
+            # Get Game Stats
+            cur.execute(f"SELECT game_name, wins, earnings FROM game_stats WHERE user_id = {ph} ORDER BY earnings DESC", (target_uid,))
             game_rows = cur.fetchall()
+            conn.close()
 
-            # C. Format Message
-            msg = f"📊 **STATS: @{target_user}**\n"
-            msg += f"💰 **Global Wallet:** {global_score} Coins\n"
-            msg += f"🏆 **Total Wins:** {total_wins}\n"
+            rank_title = get_rank(global_score)
+
+            # --- FANCY OUTPUT ---
+            msg = f"👤 **{fancy('profile')}: @{target_name}**\n"
+            msg += f"🏷️ **{fancy('rank')}:** {rank_title}\n"
+            msg += f"💰 **{fancy('net worth')}:** {global_score}\n"
+            msg += f"🏆 **{fancy('total wins')}:** {total_wins}\n"
             
             if game_rows:
-                msg += "────────────────\n"
+                msg += "──────────────────\n"
                 for g_name, g_wins, g_earn in game_rows:
                     icon = "🎮"
                     if "ludo" in g_name: icon = "🎲"
                     elif "tic" in g_name: icon = "❌"
                     elif "race" in g_name: icon = "🐎"
-                    
-                    msg += f"{icon} **{g_name.capitalize()}:** {g_earn} Coins ({g_wins} Wins)\n"
+                    # Fancy Game Name
+                    g_fancy = fancy(g_name)
+                    msg += f"{icon} **{g_fancy}:** {g_earn} ({g_wins} ᴡɪɴs)\n"
             else:
-                msg += "\n_(New Player)_"
+                msg += f"\n_({fancy('play games to earn')})_"
 
             bot.send_message(room_id, msg)
-            conn.close()
             return True
 
         except Exception as e:
             traceback.print_exc()
-            bot.send_message(room_id, f"Stats Error: {e}")
             return True
 
-    # --- 2. LEADERBOARD (!top) ---
+    # --- 2. LEADERBOARD (PAGINATION ADDED) ---
     if cmd in ["top", "lb", "leaderboard"]:
         try:
+            # Check Page Number (Default 1)
+            page = 1
+            if args and args[0].isdigit():
+                page = int(args[0])
+            
+            if page < 1: page = 1
+            limit = 10
+            offset = (page - 1) * limit
+
             conn = db.get_connection()
             cur = conn.cursor()
 
-            # Top 10 Richest Users
-            cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 10")
+            # Get Top 10 for specific page
+            query = f"SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT {limit} OFFSET {offset}"
+            cur.execute(query)
             rows = cur.fetchall()
+            
+            # Check total count for pagination info
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
             conn.close()
 
             if not rows:
-                bot.send_message(room_id, "📉 Leaderboard khali hai.")
+                bot.send_message(room_id, f"📉 {fancy('page empty')}.")
                 return True
 
-            msg = "🏆 **GLOBAL LEADERBOARD** 🏆\n\n"
+            total_pages = math.ceil(total_users / limit)
+            
+            # --- FANCY OUTPUT ---
+            msg = f"🏆 **{fancy('global leaderboard')}** 🏆\n"
+            msg += f"📄 {fancy('page')} {page}/{total_pages}\n"
+            msg += "──────────────────\n"
+            
             for idx, (name, score) in enumerate(rows):
-                rank = idx + 1
-                icon = "🔹"
-                if rank == 1: icon = "🥇"
-                elif rank == 2: icon = "🥈"
-                elif rank == 3: icon = "🥉"
+                # Calculate actual rank based on page
+                actual_rank = offset + idx + 1
                 
-                msg += f"{icon} **{name}**: {score}\n"
+                icon = "🔹"
+                if actual_rank == 1: icon = "🥇"
+                elif actual_rank == 2: icon = "🥈"
+                elif actual_rank == 3: icon = "🥉"
+                
+                msg += f"{icon} `#{actual_rank}` **{name}**: {score}\n"
+
+            # Footer for Next Page
+            if page < total_pages:
+                msg += "──────────────────\n"
+                msg += f"👉 {fancy('type')} `!top {page+1}` {fancy('for next page')}"
 
             bot.send_message(room_id, msg)
             return True
