@@ -2,12 +2,10 @@ import os
 import sqlite3
 import psycopg2
 import threading
-from urllib.parse import urlparse  # <--- Wapas daal diya safety ke liye
+from urllib.parse import urlparse
 
-# Database URL check
+# Database URL
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
-
-# GLOBAL LOCK: Multi-threading safety ke liye
 db_lock = threading.Lock()
 
 def get_connection():
@@ -15,23 +13,15 @@ def get_connection():
         try:
             return psycopg2.connect(DATABASE_URL, sslmode='require')
         except:
-            # Fallback: Agar direct URL fail ho, to urlparse use karke tod kar connect karein
-            # Ye block tab kaam aayega agar future me connection issue aaye
             result = urlparse(DATABASE_URL)
-            username = result.username
-            password = result.password
-            database = result.path[1:]
-            hostname = result.hostname
-            port = result.port
             return psycopg2.connect(
-                database=database,
-                user=username,
-                password=password,
-                host=hostname,
-                port=port
+                database=result.path[1:],
+                user=result.username,
+                password=result.password,
+                host=result.hostname,
+                port=result.port
             )
     else:
-        # SQLite fallback (Local testing)
         return sqlite3.connect("bot.db", check_same_thread=False)
 
 def init_db():
@@ -39,7 +29,7 @@ def init_db():
         conn = get_connection()
         cur = conn.cursor()
         
-        # 1. User Stats (Global Score & Total Wins)
+        # 1. User Table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
@@ -49,7 +39,7 @@ def init_db():
             )
         """)
         
-        # 2. Game Specific Stats (Har Game ka alag hisaab)
+        # 2. Game Stats Table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS game_stats (
                 user_id TEXT,
@@ -60,40 +50,39 @@ def init_db():
             )
         """)
         
-        # 3. Game Logs (Smart compatibility check)
-        if DATABASE_URL.startswith("postgres"):
-            # Postgres Syntax
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS game_logs (
-                    id SERIAL PRIMARY KEY,
-                    game_type TEXT,
-                    room_id TEXT,
-                    winner_id TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        else:
-            # SQLite Syntax
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS game_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_type TEXT,
-                    room_id TEXT,
-                    winner_id TEXT,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-        
-        # 4. Plugin Settings (Configurations)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS plugin_settings (
-                plugin_name TEXT,
-                key TEXT,
-                value TEXT,
-                PRIMARY KEY (plugin_name, key)
-            )
-        """)
-        
         conn.commit()
         conn.close()
-        print("[DB] Database initialized successfully.")
+        print("[DB] Ready.")
+
+# --- MASTER FUNCTION ---
+# Ye function saare games ka score save karega
+def add_game_result(user_id, username, game_name, amount, is_win=False):
+    if not user_id or user_id == "BOT": return
+
+    with db_lock:
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            
+            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
+            win_count = 1 if is_win else 0
+            uid = str(user_id)
+
+            # 1. Update Global Score
+            try: cur.execute(f"INSERT INTO users (user_id, username, global_score, wins) VALUES ({ph}, {ph}, 0, 0)", (uid, username))
+            except: pass 
+            
+            q1 = f"UPDATE users SET global_score = global_score + {ph}, wins = wins + {ph} WHERE user_id = {ph}"
+            cur.execute(q1, (amount, win_count, uid))
+
+            # 2. Update Game Specific Score
+            try: cur.execute(f"INSERT INTO game_stats (user_id, game_name, wins, earnings) VALUES ({ph}, {ph}, 0, 0)", (uid, game_name))
+            except: pass
+            
+            q2 = f"UPDATE game_stats SET wins = wins + {ph}, earnings = earnings + {ph} WHERE user_id = {ph} AND game_name = {ph}"
+            cur.execute(q2, (win_count, amount, uid, game_name))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[DB Error] {e}")
