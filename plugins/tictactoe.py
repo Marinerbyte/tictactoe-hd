@@ -24,7 +24,7 @@ BOT_INSTANCE = None
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[TicTacToe] Pro Bot Loaded.")
+    print("[TicTacToe] Logic Fixed.")
 
 # --- CLEANER THREAD ---
 def game_cleanup_loop():
@@ -184,16 +184,17 @@ class TicTacToe:
         self.last_interaction = time.time()
     def touch(self): self.last_interaction = time.time()
     
+    # --- FIXED CHECK_WIN (No more variable conflict) ---
     def check_win(self, board_check=None):
-        # Allow checking a hypothetical board
-        b = board_check if board_check else self.board
+        # Renamed variable to 'current_board' to avoid 'b' conflict in loop
+        current_board = board_check if board_check else self.board
         wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
-        for a, b, c in wins:
-            if b[a] and b[a] == b[b] == b[c]: return b[a]
-        if None not in b: return 'draw'
+        for i1, i2, i3 in wins: # Changed a,b,c to i1,i2,i3
+            if current_board[i1] and current_board[i1] == current_board[i2] == current_board[i3]:
+                return current_board[i1]
+        if None not in current_board: return 'draw'
         return None
     
-    # --- NEW: PRO BOT LOGIC (Smart Move) ---
     def bot_move(self):
         empty = [i for i, x in enumerate(self.board) if x is None]
         if not empty: return None
@@ -201,32 +202,28 @@ class TicTacToe:
         bot_sym = 'O'
         player_sym = 'X'
 
-        # 1. Check if Bot can win NOW
+        # 1. Check Win
         for move in empty:
             self.board[move] = bot_sym
             if self.check_win() == bot_sym:
-                # Don't reset, just keep it? No, reset to let main logic handle update
                 self.board[move] = None 
                 return move
-            self.board[move] = None # Reset
+            self.board[move] = None
 
-        # 2. Check if Player will win next (BLOCK HIM)
+        # 2. Block
         for move in empty:
             self.board[move] = player_sym
             if self.check_win() == player_sym:
                 self.board[move] = None
-                return move # BLOCK!
+                return move
             self.board[move] = None
 
-        # 3. Take Center if available (Best strategic move)
         if 4 in empty: return 4
-
-        # 4. Take Corners (0, 2, 6, 8)
+        
         corners = [0, 2, 6, 8]
         available_corners = [c for c in corners if c in empty]
         if available_corners: return random.choice(available_corners)
 
-        # 5. Take whatever is left (Random)
         return random.choice(empty)
 
 # --- MAIN HANDLER ---
