@@ -74,14 +74,12 @@ def update_stats(user_id, username):
     if not conn: return
     cur = conn.cursor()
     try:
-        # Global
         try: cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user_id, username))
         except: cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user_id, username))
         q1 = "UPDATE users SET global_score = global_score + %s, wins = wins + 1 WHERE user_id = %s"
         if not db.DATABASE_URL.startswith("postgres"): q1 = "UPDATE users SET global_score = global_score + ?, wins = wins + 1 WHERE user_id = ?"
         cur.execute(q1, (WIN_REWARD, user_id))
         
-        # Game Stats
         try: cur.execute("INSERT INTO game_stats (user_id, game_name, wins, earnings) VALUES (%s, 'ludo', 0, 0) ON CONFLICT (user_id, game_name) DO NOTHING", (user_id,))
         except: cur.execute("INSERT OR IGNORE INTO game_stats (user_id, game_name, wins, earnings) VALUES (?, 'ludo', 0, 0)", (user_id,))
         q2 = "UPDATE game_stats SET wins = wins + 1, earnings = earnings + %s WHERE user_id = %s AND game_name = 'ludo'"
@@ -114,7 +112,7 @@ def get_horse_image(index):
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-                img = img.resize((40, 40)) # Thoda chhota kiya taaki overlap me dikhe
+                img = img.resize((40, 40))
                 CACHED_IMAGES[url] = img
         except: return None
     return CACHED_IMAGES.get(url)
@@ -134,11 +132,9 @@ def create_base_board():
     font = get_font(20)
     sm_font = get_font(12)
     
-    # Lines
     for i in range(FINISH_LINE):
         x1, y1 = get_coordinates(i); x2, y2 = get_coordinates(i+1)
         draw.line([(x1 + 35, y1 + 35), (x2 + 35, y2 + 35)], fill=(101, 67, 33), width=10)
-    # Boxes
     for i in range(FINISH_LINE + 1):
         x, y = get_coordinates(i); fill_color = (210, 180, 140)
         if i == 0: fill_color = (255, 215, 0)
@@ -153,39 +149,28 @@ def create_base_board():
 BASE_BOARD_CACHE = create_base_board()
 
 def draw_game_state(players, msg=""):
-    """
-    Ek Single Image banata hai jisme sabhi players hote hain.
-    Neeche msg likha hota hai.
-    """
     img = BASE_BOARD_CACHE.copy()
-    
-    # 1. Group horses by position (Step 1, Step 5 etc)
     step_map = {}
     for p in players:
         s = p['pos']
         if s not in step_map: step_map[s] = []
         step_map[s].append(p)
     
-    # 2. Paste horses (Stacking Logic)
     for step, p_list in step_map.items():
         base_x, base_y = get_coordinates(step)
         count = 0
         for p in p_list:
             h_img = get_horse_image(p['horse_idx'])
             if h_img:
-                # Thoda offset (hatake) taaki peeche wala ghoda bhi dikhe
                 off_x = (count % 2) * 20
                 off_y = (count // 2) * 20
                 img.paste(h_img, (base_x + 10 + off_x, base_y + 10 + off_y), h_img)
                 count += 1
     
-    # 3. Message Bar at Bottom
     if msg:
         draw = ImageDraw.Draw(img)
-        # Black Rectangle Background
         draw.rectangle([0, 450, 800, 500], fill=(0,0,0))
         font = get_font(25)
-        # Centered Yellow Text
         draw.text((400, 475), msg, fill="yellow", font=font, anchor="mm")
     
     return img
@@ -255,11 +240,10 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, "🛑 Race Stopped.")
             return True
 
-        # GAME COMMANDS
+        # JOIN & START (Same as before)
         if current_game:
             game = current_game
             
-            # JOIN
             if cmd_clean == "join" and game.state == 'waiting':
                 if any(p['uid'] == user_id for p in game.players): return True
                 if len(game.players) >= MAX_PLAYERS: bot.send_message(room_id, "Full!"); return True
@@ -267,7 +251,6 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, f"✅ @{user} joined ({HORSES_CONFIG[h]['name']})")
                 return True
             
-            # START
             if cmd_clean == "start" and game.state == 'waiting':
                 if game.host_id != user_id: return True
                 if len(game.players) < 2: bot.send_message(room_id, "Need 2+ players."); return True
@@ -280,32 +263,56 @@ def handle_command(bot, command, room_id, user, args, data):
                 if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Go", "id": uuid.uuid4().hex})
                 return True
 
-            # ROLL (IMAGE GENERATION EVERY MOVE)
+            # --- MODIFIED ROLL LOGIC (MERGED TURNS) ---
             if cmd_clean == "roll" and game.state == 'playing':
                 curr = game.get_current_player()
-                if curr['uid'] == "BOT" and user_id != "BOT": return True
-                if curr['uid'] != user_id and curr['uid'] != "BOT": return True
+                if curr['uid'] == "BOT": return True
+                if curr['uid'] != user_id: return True
                 
                 game.touch()
-                dice = random.randint(1, 6)
-                curr['pos'] += dice
                 
-                # Check Win & Message
-                msg_text = f"🎲 {curr['name']} rolled {dice} (Pos: {curr['pos']})"
-                is_winner = False
+                # 1. PLAYER MOVE
+                p_dice = random.randint(1, 6)
+                curr['pos'] += p_dice
+                msg_text = f"You: {p_dice} (Pos {curr['pos']})"
                 
+                # Check Player Win
                 if curr['pos'] >= FINISH_LINE:
                     curr['pos'] = FINISH_LINE
-                    is_winner = True
-                    msg_text = f"🏆 WINNER: {curr['name']}! 🏆"
-
-                # 1. Generate ONE image with updated positions
-                img = draw_game_state(game.players, msg_text)
+                    update_stats(curr['uid'], curr['name'])
+                    img = draw_game_state(game.players, f"WINNER: {curr['name']}!")
+                    link = upload_image(bot, img, room_id)
+                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Win", "id": uuid.uuid4().hex})
+                    bot.send_message(room_id, f"🎉🏆 **{curr['name']} WINS!** 🏆🎉")
+                    with games_lock: del games[room_id]
+                    return True
                 
-                # 2. Upload
+                # Advance Turn
+                next_p = game.next_turn()
+                
+                # 2. IF NEXT IS BOT -> MOVE IMMEDIATELY & COMBINE IMAGE
+                if next_p['uid'] == "BOT":
+                    b_dice = random.randint(1, 6)
+                    next_p['pos'] += b_dice
+                    msg_text += f" | Bot: {b_dice} (Pos {next_p['pos']})"
+                    
+                    # Check Bot Win
+                    if next_p['pos'] >= FINISH_LINE:
+                        next_p['pos'] = FINISH_LINE
+                        img = draw_game_state(game.players, "BOT WINS!")
+                        link = upload_image(bot, img, room_id)
+                        if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin", "id": uuid.uuid4().hex})
+                        bot.send_message(room_id, "🤖 **Computer Wins!**")
+                        with games_lock: del games[room_id]
+                        return True
+                    
+                    # Turn back to Player
+                    game.next_turn()
+                
+                # 3. SEND ONE COMBINED IMAGE
+                img = draw_game_state(game.players, msg_text)
                 link = upload_image(bot, img, room_id)
                 
-                # 3. Send
                 if link:
                     bot.send_json({
                         "handler": "chatroommessage", 
@@ -318,22 +325,6 @@ def handle_command(bot, command, room_id, user, args, data):
                 else:
                     bot.send_message(room_id, msg_text)
 
-                # End or Next
-                if is_winner:
-                    update_stats(curr['uid'], curr['name'])
-                    bot.send_message(room_id, f"🎉 **{curr['name']} WINS!** (+{WIN_REWARD} Coins)")
-                    with games_lock: del games[room_id]
-                    return True
-                
-                next_p = game.next_turn()
-                
-                # Auto Bot Move
-                if next_p['uid'] == "BOT":
-                    def bot_move():
-                        time.sleep(1.5)
-                        handle_command(bot, "roll", room_id, "BOT", [], {"userid": "BOT"})
-                    threading.Thread(target=bot_move).start()
-                
                 return True
 
         return False
