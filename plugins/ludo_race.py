@@ -4,13 +4,13 @@ import io
 import requests
 import time
 from PIL import Image, ImageDraw, ImageFont
-from db import get_connection  # <--- NEW: Database Connection
+from db import get_connection, db_lock  # Importing Safety Locks
 
 # --- CONFIGURATION ---
 MAX_PLAYERS = 4 
 FINISH_LINE = 39 
 TIMEOUT_SECONDS = 90
-WIN_REWARD = 100 # <--- NEW: 100 Coins for winning
+WIN_REWARD = 100
 
 HORSES_CONFIG = [
     {"name": "Bijli ⚡",   "url": "https://www.dropbox.com/scl/fi/5mxn0hancsdixl8o8qxv9/file_000000006d7871fdaee7d2e8f89d10ac.png?rlkey=tit3yzcn0dobpjy2p7g1hhr0z&st=7xyenect&dl=1"},
@@ -26,26 +26,30 @@ ACTIVE_GAMES = {}
 CACHED_IMAGES = {}
 BASE_BOARD_CACHE = None 
 
-# --- 1. DB HELPER (NEW) ---
+# --- 1. DB HELPER (THREAD SAFE) ---
 def add_win_stats(user_id, username):
-    """Updates user score and wins in DB"""
+    """Updates Global & Game Stats safely using db_lock"""
     if user_id == "BOT": return
     
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        
-        # Ensure user exists
-        cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (str(user_id), username))
-        
-        # Update Score and Win Count
-        cur.execute("UPDATE users SET global_score = global_score + ?, wins = wins + 1 WHERE user_id = ?", (WIN_REWARD, str(user_id)))
-        
-        conn.commit()
-        conn.close()
-        print(f"[DB] Awarded {WIN_REWARD} points to {username}")
-    except Exception as e:
-        print(f"[DB Error] {e}")
+    # LOCK DB access so no race conditions happen
+    with db_lock:
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            
+            # A. Global Stats (Total Wealth)
+            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (str(user_id), username))
+            cur.execute("UPDATE users SET global_score = global_score + ?, wins = wins + 1 WHERE user_id = ?", (WIN_REWARD, str(user_id)))
+            
+            # B. Ludo Specific Stats (Game Skill)
+            cur.execute("INSERT OR IGNORE INTO game_stats (user_id, game_name, wins, earnings) VALUES (?, 'ludo', 0, 0)", (str(user_id),))
+            cur.execute("UPDATE game_stats SET wins = wins + 1, earnings = earnings + ? WHERE user_id = ? AND game_name = 'ludo'", (WIN_REWARD, str(user_id)))
+            
+            conn.commit()
+            conn.close()
+            print(f"[DB] {username} won Ludo! (+{WIN_REWARD} Global & Local)")
+        except Exception as e:
+            print(f"[DB Error] {e}")
 
 # --- 2. IMAGE LOADER ---
 def get_horse_image(index):
@@ -62,7 +66,7 @@ def get_horse_image(index):
             return None
     return CACHED_IMAGES.get(url)
 
-# --- 3. BOARD MAPPING ---
+# --- 3. BOARD GENERATION ---
 def get_coordinates(step):
     row = step // 10
     col = step % 10
@@ -196,6 +200,7 @@ def cleanup_loop(bot):
 def handle_command(bot, command, room_id, user, args, data):
     user_id = data.get('userid', user)
 
+    # A. START
     if command == "race":
         mode = args[0] if args else "1"
         with GAME_LOCK:
@@ -215,6 +220,7 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, f"🏆 **Lobby Open! (Max 4)**\nHost: @{user} ({h_name})\nType `!join` to enter.\nHost type `!start`.")
         return True
 
+    # B. JOIN
     if command == "join":
         with GAME_LOCK:
             game = ACTIVE_GAMES.get(room_id)
@@ -232,6 +238,7 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, f"✅ @{user} joined with **{h_name}**")
         return True
 
+    # C. START PLAY
     if command == "start":
         with GAME_LOCK:
             game = ACTIVE_GAMES.get(room_id)
@@ -246,12 +253,14 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, f"🚦 **RACE STARTED!** 🚦\nPahli baari: @{p1['name']}\nType `!roll`")
         return True
 
+    # D. ROLL
     if command == "roll":
         if room_id not in ACTIVE_GAMES: return False
         with GAME_LOCK:
             game = ACTIVE_GAMES[room_id]
             if game.state != 'playing': return True
             curr = game.get_current_player()
+            
             if curr['uid'] == "BOT" and user_id != "BOT": return True
             if curr['uid'] != user_id and curr['uid'] != "BOT":
                 bot.send_message(room_id, f"Wait! @{curr['name']}'s turn.")
@@ -262,23 +271,16 @@ def handle_command(bot, command, room_id, user, args, data):
             curr['pos'] += dice
             msg = f"🎲 @{curr['name']} rolled **{dice}**! (Pos: {curr['pos']})"
             
-            # --- WINNER CHECK ---
+            # WINNER CHECK
             if curr['pos'] >= FINISH_LINE:
                 curr['pos'] = FINISH_LINE
                 
-                # 1. Update DB (Points Logic)
-                if curr['uid'] != "BOT":
-                    add_win_stats(curr['uid'], curr['name'])
-                    win_msg = f"🎉🏆 **{curr['name']} WINS (+{WIN_REWARD} Coins)!** 🏆🎉"
-                else:
-                    win_msg = f"🤖 **Computer Wins!** Better luck next time."
-
+                # Update DB (Safely)
+                add_win_stats(curr['uid'], curr['name'])
+                
+                win_msg = f"🎉🏆 **{curr['name']} WINS (+{WIN_REWARD} Coins)!** 🏆🎉"
                 bot.send_message(room_id, win_msg)
                 
-                # Placeholder: If you want to show final board
-                # img = generate_board_image(game.players, "WINNER!")
-                # bot.send_image(img) 
-
                 del ACTIVE_GAMES[room_id]
                 return True
 
