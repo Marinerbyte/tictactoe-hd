@@ -161,8 +161,23 @@ DASHBOARD_HTML = """
         if (pageId === 'page-explorer') updateRoomExplorer();
     }
 
-    function showToast(message, type = 'success') { /* ... same ... */ }
-    async function api(endpoint, data = {}) { /* ... same ... */ }
+    function showToast(message, type = 'success') {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 4000);
+    }
+
+    async function api(endpoint, data = {}) {
+        const response = await fetch('/api' + endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        return await response.json();
+    }
     
     // --- API FUNCTIONS ---
     async function loginAndStart() {
@@ -180,24 +195,31 @@ DASHBOARD_HTML = """
         const res = await api('/start', {username: u, password: p});
         showToast(res.msg, res.success ? 'success' : 'error');
         
-        btn.innerHTML = 'Connect';
         btn.disabled = false;
         if(res.success) {
             btn.style.background = 'var(--green)';
             btn.innerHTML = '<i class="fas fa-check-circle"></i> Connected';
         } else {
             statusDot.className = 'status-dot offline';
+            btn.innerHTML = 'Connect';
         }
     }
     
-    async function stopBot() { /* ... same ... */ }
+    async function stopBot() {
+        const res = await api('/stop');
+        showToast(res.msg, 'error');
+        const loginBtn = document.getElementById('btn-login');
+        loginBtn.style.background = 'var(--primary)';
+        loginBtn.innerHTML = 'Connect';
+    }
 
     async function joinRoom() {
         const roomName = document.getElementById('roomName').value;
-        if (!roomName) return;
+        if (!roomName) return showToast('Room Name required', 'error');
+        
         await api('/join', {room: roomName});
         showToast(`Join command sent to '${roomName}'`, 'success');
-        setTimeout(updateDashboardData, 1000); // Force update after a delay
+        setTimeout(updateDashboardData, 1000);
     }
 
     async function updateRoomExplorer() {
@@ -215,15 +237,10 @@ DASHBOARD_HTML = """
             document.getElementById('user-count').innerText = res.users.length;
             document.getElementById('user-list').innerHTML = res.users.map(u => `<li><i class="fas fa-user"></i> ${u}</li>`).join('');
             
-            // Reverse is handled by CSS, just append messages normally
-            const chatHtml = res.chat.map(m => {
+            document.getElementById('chat-window').innerHTML = res.chat.map(m => {
                 const authorClass = m.type;
                 return `<div class="chat-message ${authorClass}"><div class="author">${m.author}</div><div>${m.text}</div></div>`;
             }).join('');
-            const chatWindow = document.getElementById('chat-window');
-            chatWindow.innerHTML = chatHtml;
-            // Scroll to bottom (which is visually the top due to flex-direction: column-reverse)
-            chatWindow.scrollTop = 0;
         }
     }
 
@@ -236,35 +253,33 @@ DASHBOARD_HTML = """
             ]);
 
             // Header
-            document.getElementById('status').className = `status-dot ${status.running ? 'online' : 'offline'}`;
-            document.getElementById('health-stats').innerHTML = `...`; // assume same
+            const statusDot = document.getElementById('status');
+            if (!statusDot.classList.contains('connecting')) { // Don't override connecting state
+                statusDot.className = `status-dot ${status.running ? 'online' : 'offline'}`;
+            }
+            document.getElementById('health-stats').innerHTML = `<span><i class="fas fa-clock"></i> ${health.uptime}</span> | <span><i class="fas fa-memory"></i> ${health.ram}%</span> | <span><i class="fas fa-microchip"></i> ${health.cpu}%</span>`;
 
             // Page 1
             document.getElementById('room-count').innerText = status.rooms.length;
             document.getElementById('log-window').innerHTML = status.logs.map(log => `<div>${log}</div>`).join('');
 
-            // --- THIS IS THE FIX ---
-            // Page 2 - Room Selector Update
+            // Page 2
             const selector = document.getElementById('room-selector');
             if (JSON.stringify(currentRooms) !== JSON.stringify(status.rooms)) {
                 currentRooms = status.rooms;
                 const currentSelected = selector.value;
                 selector.innerHTML = '<option value="">-- Select a Room --</option>' + currentRooms.map(r => `<option value="${r}">${r}</option>`).join('');
-                
-                // If a room was previously selected, try to re-select it
                 if (currentRooms.includes(currentSelected)) {
                     selector.value = currentSelected;
-                } 
-                // *** IMPORTANT FIX: If no room is selected AND we have rooms, AUTO-SELECT the first one ***
-                else if (currentRooms.length > 0) {
+                } else if (currentRooms.length > 0) {
                     selector.value = currentRooms[0];
                 }
             }
             
             // Page 3
-            // ... (same as before)
+            document.getElementById('plugin-list').innerHTML = status.plugins.map(p => `<div><i class="fas fa-check-circle" style="color:var(--green)"></i> ${p}</div>`).join('');
+            document.querySelector('#leaderboard-table tbody').innerHTML = leaderboard.data.map((p, i) => `<tr><td>#${i + 1}</td><td>${p.username}</td><td>${p.score}</td><td>${p.wins}</td></tr>`).join('');
 
-            // Auto-refresh the active page's live data
             if (activePage === 'page-explorer') {
                 updateRoomExplorer();
             }
@@ -280,8 +295,8 @@ DASHBOARD_HTML = """
 """
 
 def register_routes(app, bot_instance):
-    # Backend code is PERFECT, no changes needed
-    # (The previous ui.py backend code is correct)
+    # Python code is correct, no changes needed here.
+    # The previous backend code is fine.
     @app.route('/')
     def index(): return render_template_string(DASHBOARD_HTML)
     
@@ -317,13 +332,19 @@ def register_routes(app, bot_instance):
         return jsonify({"success": False, "users": [], "chat": []})
 
     @app.route('/api/stop', methods=['POST'])
-    def stop_bot(): bot_instance.disconnect(); return jsonify(success=True)
+    def stop_bot(): 
+        bot_instance.disconnect()
+        return jsonify({"success": True, "msg": "Bot has been stopped."})
+
     @app.route('/api/join', methods=['POST'])
     def join_room():
-        bot_instance.join_room(request.json['room']); return jsonify(success=True)
+        bot_instance.join_room(request.json['room'])
+        return jsonify({"success": True, "msg": "Join command sent."})
+
     @app.route('/api/plugins/reload', methods=['POST'])
     def reload_plugins():
-        bot_instance.plugins.load_plugins(); return jsonify(success=True)
+        bot_instance.plugins.load_plugins()
+        return jsonify({"success": True, "msg": "Plugins reloaded."})
         
     @app.route('/api/status', methods=['GET'])
     def status():
