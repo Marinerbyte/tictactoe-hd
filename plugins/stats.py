@@ -2,76 +2,85 @@ import sys
 import os
 import threading
 
-# Root folder se 'db.py' ko import karne ka tarika
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import db
+# Root folder se 'db.py' import karne ka setup
+try:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    import db
+except Exception as e:
+    print(f"DB Import Error: {e}")
 
-def handle_command(bot, command, room_id, user, args):
+def handle_command(bot, command, room_id, user, args, data):
     """
     Commands:
-    !score - Apna score dekhein
-    !free  - Test karne ke liye 100 coins lein
-    !top   - Top 5 ameer log dekhein
+    !score / !coins - Check Balance & Wins
+    !top  - Leaderboard
+    !free - Get 100 free coins (Once per day logic can be added later)
     """
     
-    # Database connection
+    cmd_clean = command.lower().strip()
+    
+    # Database Connection
     conn = db.get_connection()
     if not conn: return False
     cur = conn.cursor()
 
-    # Pehle ensure karein ki user database mein exist karta hai
-    # (user_id ko hum username maan rahe hain abhi ke liye)
+    # Ensure user exists in DB
     try:
-        cur.execute("INSERT INTO users (user_id, username) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user, user))
-    except:
-        # SQLite fallback syntax agar Postgres fail ho (waise Render par Postgres hai)
+        # Postgres syntax
         try:
-            cur.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user, user))
+            cur.execute("INSERT INTO users (user_id, username, global_score, wins) VALUES (%s, %s, 0, 0) ON CONFLICT (user_id) DO NOTHING", (user, user))
         except:
-            pass
-    conn.commit()
-
-    # --- !score Command ---
-    if command == "score":
-        try:
-            # Check for Postgres syntax first
-            cur.execute("SELECT global_score, wins FROM users WHERE user_id = %s", (user,))
-        except:
-            # Fallback to SQLite
-            cur.execute("SELECT global_score, wins FROM users WHERE user_id = ?", (user,))
-            
-        row = cur.fetchone()
-        score = row[0] if row else 0
-        wins = row[1] if row else 0
-        
-        bot.send_message(room_id, f"💳 @{user} | Coins: {score} | Wins: {wins}")
-        conn.close()
-        return True
-
-    # --- !free Command (Testing ke liye) ---
-    if command == "free":
-        try:
-            cur.execute("UPDATE users SET global_score = global_score + 100 WHERE user_id = %s", (user,))
-        except:
-            cur.execute("UPDATE users SET global_score = global_score + 100 WHERE user_id = ?", (user,))
-            
+            # SQLite syntax
+            cur.execute("INSERT OR IGNORE INTO users (user_id, username, global_score, wins) VALUES (?, ?, 0, 0)", (user, user))
         conn.commit()
-        bot.send_message(room_id, f"💰 @{user} ko mile 100 Free Coins! Maze karo!")
-        conn.close()
-        return True
+    except:
+        pass
 
-    # --- !top Command (Leaderboard) ---
-    if command == "top":
-        cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 5")
-        rows = cur.fetchall()
-        
-        msg = "🏆 TOP 5 PLAYERS 🏆\n"
-        for i, row in enumerate(rows):
-            msg += f"{i+1}. {row[0]} - 💰 {row[1]}\n"
+    # --- COMMAND: !SCORE / !COINS ---
+    if cmd_clean in ["score", "coins", "bal", "balance"]:
+        try:
+            query = "SELECT global_score, wins FROM users WHERE user_id = %s"
+            if not db.DATABASE_URL.startswith("postgres"): query = "SELECT global_score, wins FROM users WHERE user_id = ?"
             
-        bot.send_message(room_id, msg)
-        conn.close()
-        return True
+            cur.execute(query, (user,))
+            row = cur.fetchone()
+            
+            score = row[0] if row else 0
+            wins = row[1] if row else 0
+            
+            msg = f"💳 **@{user}** Wallet:\n💰 Coins: **{score}**\n🏆 Wins: **{wins}**"
+            bot.send_message(room_id, msg)
+            return True
+        except Exception as e:
+            print(f"Score Error: {e}")
+
+    # --- COMMAND: !TOP (Leaderboard) ---
+    if cmd_clean == "top":
+        try:
+            cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 5")
+            rows = cur.fetchall()
+            
+            msg = "🏆 **RICH LIST** 🏆\n"
+            for i, row in enumerate(rows):
+                medal = "🥇" if i==0 else "🥈" if i==1 else "🥉" if i==2 else f"{i+1}."
+                msg += f"{medal} {row[0]}: {row[1]}\n"
+            
+            bot.send_message(room_id, msg)
+            return True
+        except Exception as e:
+            print(f"Top Error: {e}")
+
+    # --- COMMAND: !FREE (Testing Money) ---
+    if cmd_clean == "free":
+        try:
+            query = "UPDATE users SET global_score = global_score + 1000 WHERE user_id = %s"
+            if not db.DATABASE_URL.startswith("postgres"): query = "UPDATE users SET global_score = global_score + 1000 WHERE user_id = ?"
+            
+            cur.execute(query, (user,))
+            conn.commit()
+            bot.send_message(room_id, f"💰 @{user} received **1000 Free Coins**!")
+            return True
+        except: pass
 
     conn.close()
     return False
