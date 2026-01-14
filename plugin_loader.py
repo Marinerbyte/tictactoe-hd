@@ -35,8 +35,7 @@ class PluginManager:
 
     def process_message(self, data):
         """
-        Ye function raw data leta hai, parse karta hai,
-        aur plugins ko 'raw_data' ke sath call karta hai.
+        Yeh function chat messages ko process karke plugins tak bhejta hai.
         """
         text = data.get("text", "")
         room_id = data.get("roomid")
@@ -44,7 +43,7 @@ class PluginManager:
         
         if not text: return
 
-        # Parse Command
+        # Command Parse Karta Hai
         cmd = ""
         args = []
         if text.startswith("!"):
@@ -52,17 +51,33 @@ class PluginManager:
             cmd = parts[0]
             args = parts[1:]
         else:
-            cmd = text.strip() # For game inputs
+            cmd = text.strip()
         
-        # Dispatch to Plugins
+        # Plugins ko Command Bhejta Hai
         for name, module in self.plugins.items():
             if hasattr(module, 'handle_command'):
                 try:
-                    # NEW STANDARD: Pass 'data' as the last argument
-                    # Plugins can access data['userid'], data['avatar'], etc.
                     if module.handle_command(self.bot, cmd, room_id, user, args, data):
                         return True
                 except Exception as e:
                     print(f"[Plugin Error] {name}: {e}")
                     traceback.print_exc()
         return False
+
+    # --- NEW ---
+    def process_system_message(self, data):
+        """
+        Yeh naya function hai jo non-chat messages (jaise 'roleslist') ko
+        seedhe sabhi plugins ke paas bhejta hai.
+        """
+        for name, module in self.plugins.items():
+            # Hum check karenge ki plugin me 'handle_system_message' naam ka function hai ya nahi.
+            # Sirf 'admin.py' me hi yeh function hoga.
+            if hasattr(module, 'handle_system_message'):
+                try:
+                    # Agar function hai, to data usko de do.
+                    module.handle_system_message(self.bot, data)
+                except Exception as e:
+                    print(f"[Plugin System Error] {name}: {e}")
+                    traceback.print_exc()
+    # --- END NEW ---
