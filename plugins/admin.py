@@ -9,11 +9,11 @@ try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from db import add_admin, remove_admin, get_all_admins
 except Exception as e:
-    print(f"Admin DB Import Error: {e}")
+    print(f"[Admin Plugin] DB Import Error: {e}")
 
 # --- CONFIGURATION ---
 MASTER_ADMIN = "yasin"
-LIST_TIMEOUT = 15  # Timeout set to 15 seconds as requested
+LIST_TIMEOUT = 15
 ITEMS_PER_PAGE = 10
 
 # --- GLOBAL STATE ---
@@ -35,7 +35,7 @@ ACTION_MAP = {
 }
 ROLE_ACTIONS = ['outcast', 'member', 'owner', 'admin']
 
-# --- SYSTEM MESSAGE HANDLER (For !banlist, etc.) ---
+# --- SYSTEM MESSAGE HANDLER (For Role Lists) ---
 def handle_system_message(bot, data):
     if data.get("handler") != "roleslist": return
     request_id = data.get("id")
@@ -48,35 +48,25 @@ def handle_system_message(bot, data):
 
 # --- HELPER FUNCTIONS ---
 def display_list(bot, session):
-    """Universal function to display any kind of list (role or user)."""
-    list_type = session['type']
-    page = session['page']
-    user_list = session['user_list']
-    
-    title = ""
-    action_prompt = ""
-    if list_type == 'role_list':
-        title = session['role_name'].replace('_', ' ').title()
-        action_prompt = "Type `remove [number]` to remove from role."
-    elif list_type == 'user_list':
-        title = "Room User List"
-        action_prompt = "Type `[action] [number]` (e.g., k 1)."
+    list_type, page, user_list = session['type'], session['page'], session['user_list']
+    title = "Room User List" if list_type == 'user_list' else session['role_name'].replace('_', ' ').title()
+    prompt = "Type `[action] [num]` (e.g., k 1)" if list_type == 'user_list' else "Type `remove [num]`"
 
     start_index = (page - 1) * ITEMS_PER_PAGE
     page_list = user_list[start_index : start_index + ITEMS_PER_PAGE]
+
     if not page_list:
         bot.send_message(session['room_id'], "No more users on this page.")
         return
 
     response = f"📋 {title} (Page {page}) - Actions for {LIST_TIMEOUT}s\n" + "─" * 22 + "\n"
     for i, u_data in enumerate(page_list):
-        # user_list from !l has 'user_id' key, from roles it has 'userid'
         username = u_data.get('username', 'Unknown')
         response += f"`{start_index + i + 1}`: @{username}\n"
     
     total_pages = (len(user_list) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     if page < total_pages: response += "─" * 22 + "\nType `!n` for the next page.\n"
-    response += action_prompt
+    response += prompt
     bot.send_message(session['room_id'], response)
 
 def has_permission(username, user_id):
@@ -85,7 +75,7 @@ def has_permission(username, user_id):
     return user_id and str(user_id) in db_admins
 
 def perform_action(bot, room_id, target_id, target_name, action):
-    # This is a central function to avoid repeating code.
+    if not target_id: return
     if action == 'kick': bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_id})
     elif action == 'mute': bot.send_json({"handler": "muteuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_id})
     elif action == 'unmute': bot.send_json({"handler": "unmuteuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_id})
@@ -102,37 +92,41 @@ def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     user_id = user_cache.get(user.lower())
 
-    # Master Admin commands are checked first as they are special.
     if cmd in ["mas", "umas"]:
         if user.lower() != MASTER_ADMIN.lower(): return True
-        # ... (Master admin logic is the same)
+        if not args: return True
+        target_user = args[0]
+        target_id = user_cache.get(target_user.lower())
+        if not target_id:
+            bot.send_message(room_id, f"⚠️ User '{target_user}' needs to type in chat first.")
+            return True
+        if cmd == "mas": add_admin(target_id) and bot.send_message(room_id, f"✅ @{target_user} is now a sub-admin.")
+        else: remove_admin(target_id) and bot.send_message(room_id, f"✅ @{target_user} is no longer a sub-admin.")
         return True
 
-    # Check permission for all other commands.
     if not has_permission(user, user_id): return False
 
-    # --- LIST-BASED COMMANDS & ACTIONS ---
-    # General User List (!l, !list)
+    if cmd == "admins":
+        db_admin_ids = get_all_admins()
+        id_to_name_map = {uid: name.capitalize() for name, uid in user_cache.items()}
+        admin_names = [f"🛡️ @{id_to_name_map.get(admin_id, f'UserID: {admin_id}')}" for admin_id in db_admin_ids]
+        response = f"👑 **Master Admin** 👑\n└─ @{MASTER_ADMIN.capitalize()}\n\n"
+        response += "🛡️ **Sub-Admins** 🛡️\n" + ("\n".join(f"└─ {name}" for name in admin_names) if admin_names else "└─ No sub-admins.")
+        bot.send_message(room_id, response)
+        return True
+
     if cmd in ["l", "list"]:
         current_users = bot.room_details.get(room_id, {}).get('users', [])
         search_term = args[0].lower() if args else None
-        
-        filtered_list = []
-        for u_name in current_users:
-            u_id = user_cache.get(u_name.lower())
-            if u_id and (not search_term or u_name.lower().startswith(search_term)):
-                filtered_list.append({'username': u_name, 'user_id': u_id})
-
+        filtered_list = [{'username': u_name, 'user_id': user_cache.get(u_name.lower())} for u_name in current_users if user_cache.get(u_name.lower()) and (not search_term or u_name.lower().startswith(search_term))]
         if not filtered_list:
-            bot.send_message(room_id, "No matching users found in the room.")
+            bot.send_message(room_id, "No matching users found.")
             return True
-
         with sessions_lock:
             admin_sessions[user_id] = {'type': 'user_list', 'user_list': filtered_list, 'page': 1, 'room_id': room_id, 'timestamp': time.time()}
             display_list(bot, admin_sessions[user_id])
         return True
 
-    # Role-based Lists (!banlist, etc.)
     if cmd in ROLE_LIST_MAP:
         request_id, role_to_get = uuid.uuid4().hex, ROLE_LIST_MAP[cmd]
         with sessions_lock:
@@ -141,49 +135,35 @@ def handle_command(bot, command, room_id, user, args, data):
         bot.send_message(room_id, f"Requesting {role_to_get.replace('_', ' ')}... Please wait.")
         return True
 
-    # Actions on Active Lists (!n, remove 1, k 1, etc.)
     with sessions_lock: session = admin_sessions.get(user_id)
     if session and time.time() - session['timestamp'] < LIST_TIMEOUT:
-        # Pagination
         if cmd == 'n':
             session['page'] += 1
-            session['timestamp'] = time.time() # Reset timer
+            session['timestamp'] = time.time()
             display_list(bot, session)
             return True
 
-        # Action by number
         if args and args[0].isdigit():
             index = int(args[0]) - 1
             if 0 <= index < len(session['user_list']):
                 target = session['user_list'][index]
-                target_name = target['username']
-                # Get the correct user ID key
-                target_id = target.get('user_id') or target.get('userid')
-
-                # Action for Role Lists (!banlist -> remove 1)
-                if cmd == "remove" and session['type'] == 'role_list':
-                    perform_action(bot, room_id, target_id, target_name, 'member')
-                    with sessions_lock: del admin_sessions[user_id]
-                    return True
+                target_name, target_id = target['username'], target.get('user_id') or target.get('userid')
                 
-                # Action for User Lists (!l -> k 1)
-                elif cmd in ACTION_MAP and session['type'] == 'user_list':
+                if session['type'] == 'user_list' and cmd in ACTION_MAP:
                     perform_action(bot, room_id, target_id, target_name, ACTION_MAP[cmd])
-                    with sessions_lock: del admin_sessions[user_id]
-                    return True
+                elif session['type'] == 'role_list' and cmd == 'remove':
+                    perform_action(bot, room_id, target_id, target_name, 'member')
+                
+                del admin_sessions[user_id]
+                return True
 
-    # --- DIRECT COMMANDS (!kick username) ---
     if cmd in ACTION_MAP and args:
-        target_user, target_id = args[0], user_cache.get(args[0].lower())
+        target_user = args[0]
+        target_id = user_cache.get(target_user.lower())
         if not target_id:
             bot.send_message(room_id, f"⚠️ User '{target_user}' not found or hasn't spoken yet.")
             return True
         perform_action(bot, room_id, target_id, target_user, ACTION_MAP[cmd])
-        return True
-    
-    # Admin List command is separate as it doesn't create a session
-    if cmd == "admins":
-        # ... (admin list logic is the same)
         return True
 
     return False
