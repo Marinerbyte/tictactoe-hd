@@ -10,7 +10,8 @@ from db import init_db
 API_URL = "https://api.howdies.app/api/login"
 WS_URL = "wss://app.howdies.app/howdies?token={}"
 
-class HowBot:
+# --- FIX: Yahan naam theek kar diya gaya hai ---
+class HowdiesBot:
     def __init__(self):
         self.token = None; self.ws = None; self.user_data = {}
         self.user_id = None; self.active_rooms = []; self.logs = []
@@ -73,23 +74,19 @@ class HowBot:
 
             if handler == "chatroommessage":
                 if room_name and room_name in self.room_details:
-                    # UI ke liye chat log update karne wala purana code - BILKUL SAFE
                     author = data.get('username', 'Unknown')
                     author_class = 'bot' if author == self.user_data.get('username') else 'user'
                     log_entry = {'author': author, 'text': data.get('text', ''), 'type': author_class}
                     self.room_details[room_name]['chat_log'].append(log_entry)
                     if len(self.room_details[room_name]['chat_log']) > 50:
                         self.room_details[room_name]['chat_log'].pop(0)
-                # Chat messages ko plugins tak bhej do (commands ke liye)
                 self.plugins.process_message(data)
             
-            # UI ke liye user list update karne wala purana code - BILKUL SAFE
             elif handler == "userjoin" and room_name in self.room_details:
                 user = data.get("username")
                 if user not in self.room_details[room_name]['users']:
                     self.room_details[room_name]['users'].append(user)
 
-            # UI ke liye user list update karne wala purana code - BILKUL SAFE
             elif handler == "userleave" and room_name in self.room_details:
                 user = data.get("username")
                 if user in self.room_details[room_name]['users']:
@@ -103,20 +100,14 @@ class HowBot:
                     if room_name not in self.active_rooms: self.active_rooms.append(room_name)
                     self.log(f"SUCCESS: Joined '{room_name}' (ID: {room_id}).")
             
-            # UI ke liye user list update karne wala purana code - BILKUL SAFE
             elif handler == "activeoccupants" and room_name in self.room_details:
                 users = [u.get('username') for u in data.get("users", [])]
                 self.room_details[room_name]['users'] = users
                 self.log(f"EVENT: Received user list for '{room_name}' ({len(users)} users).")
             
-            # --- NEW ---
-            # Yeh naya hissa hai. Agar message upar me se kuch bhi nahi hai, 
-            # to woh ek special system message ho sakta hai (jaise 'roleslist').
-            # Hum use plugins tak bhej denge taaki 'admin.py' use pakad sake.
             else:
                 if hasattr(self.plugins, 'process_system_message'):
                     self.plugins.process_system_message(data)
-            # --- END NEW ---
 
         except Exception as e:
             self.log(f"ERROR: on_message: {e}")
@@ -161,7 +152,3 @@ class HowBot:
         self.room_id_to_name_map = {}
         if self.ws:
             self.ws.close()
-
-# --- NEW: We also need to update plugin_loader.py to handle this ---
-# BINA ISKE UPAR WALA CODE KAAM NAHI KAREGA.
-# Main agle step me is file ko update karunga.
