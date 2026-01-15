@@ -4,114 +4,175 @@ import time
 import sys
 import os
 
-# --- DB (Permissions) ---
+# --- DB IMPORTS ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    # Assume db.py has these functions: add_admin, remove_admin, get_all_admins
-    # from db import add_admin, remove_admin, get_all_admins
+    from db import add_admin, remove_admin, get_all_admins
 except Exception as e:
     print(f"[Admin Plugin] DB Import Error: {e}")
 
 # --- CONFIG ---
-MASTER_ADMIN = "yasin"
-ACTION_TIMEOUT = 10 # Seconds to wait for user list
+# Ye 'GOD' user hai. Ise koi touch nahi kar sakta.
+SUPER_OWNER = "yasin" 
 
 # --- GLOBAL STATE ---
-pending_actions = {} # Stores actions waiting for a user list
-actions_lock = threading.Lock()
+pending_room_actions = {} 
+action_lock = threading.Lock()
 
 # --- PERMISSION CHECK ---
-def has_permission(username):
-    # db_admins = get_all_admins()
-    # For now, only master admin
-    return username.lower() == MASTER_ADMIN.lower()
+def is_admin(bot, user_id, username):
+    """Admin check: Super Owner OR Database Admin"""
+    # 1. Check Super Owner
+    if username and username.lower() == SUPER_OWNER.lower():
+        return True
+    
+    # 2. Check Database (ID se)
+    if user_id:
+        db_admins = get_all_admins() # db.py se list aayegi
+        if str(user_id) in db_admins:
+            return True
+    
+    return False
 
-# --- SYSTEM MESSAGE HANDLER (CRITICAL) ---
+# --- SYSTEM MESSAGE HANDLER (The Engine) ---
 def handle_system_message(bot, data):
-    """This function is called by bot_engine when a non-chat message arrives."""
     handler = data.get("handler")
-    request_id = data.get("id")
-
-    if handler == "userslist" and request_id in pending_actions:
-        with actions_lock:
-            action_data = pending_actions.pop(request_id)
+    
+    # Jab server users ki list bhejta hai
+    if handler in ["activeoccupants", "userslist"]:
+        room_id = str(data.get("roomid"))
         
-        target_username = action_data['target_username']
-        action_to_perform = action_data['action']
-        room_id = action_data['room_id']
-
-        # 1. Find the User ID from the received list
+        with action_lock:
+            # Agar is room ke liye koi action pending nahi hai to return
+            if room_id not in pending_room_actions:
+                return 
+            action_data = pending_room_actions.pop(room_id)
+        
+        target_name = action_data['target_clean']
+        action_type = action_data['action']
+        requester_room = action_data['room_id']
+        
+        # List me Target ko dhoondo
+        users_list = data.get("users", [])
         target_user_id = None
-        for user_obj in data.get("users", []):
-            if user_obj.get('username', '').lower() == target_username.lower():
-                target_user_id = user_obj.get('userid')
+        target_real_name = target_name 
+        
+        for u in users_list:
+            if u.get('username', '').lower() == target_name:
+                target_user_id = str(u.get('userid') or u.get('id'))
+                target_real_name = u.get('username')
                 break
-
+        
+        # Agar user room me nahi mila
         if not target_user_id:
-            bot.send_message(room_id, f"⚠️ Action failed. User '@{target_username}' not found.")
+            bot.send_message(requester_room, f"⚠️ User @{target_name} is room me nahi dikh raha.")
             return
 
-        # 2. Prepare the final payload with the correct ID
-        payload = {
-            "id": uuid.uuid4().hex,
-            "roomid": room_id,
-            "to": target_user_id
-        }
+        # --- SAFETY CHECK (NEW) ---
+        # Owner ya Bot ko kick/ban hone se bachana
+        if target_real_name.lower() == SUPER_OWNER.lower() or target_real_name == bot.user_data.get('username'):
+            bot.send_message(requester_room, "🛡️ **Security Alert:** Main Owner ya khud ko Kick/Ban nahi kar sakta!")
+            return
 
-        if action_to_perform == 'ban':
-            payload['handler'] = 'changerole'
-            payload['targetid'] = target_user_id
-            payload['role'] = 'outcast'
-            del payload['to']
-        else:
-            payload['handler'] = f"{action_to_perform}user"
+        # --- DATABASE ACTIONS ---
+        req_id = uuid.uuid4().hex
+        
+        if action_type == 'mas':
+            if add_admin(target_user_id):
+                bot.send_message(requester_room, f"✅ **@{target_real_name}** ab Permanent Admin hai (DB Saved).")
+            else:
+                bot.send_message(requester_room, f"⚠️ **@{target_real_name}** pehle se Admin hai.")
 
-        # 3. Send the command
-        bot.send_json(payload)
-        bot.send_message(room_id, f"✅ Action `{action_to_perform}` performed on @{target_username}.")
+        elif action_type == 'rmas':
+            if remove_admin(target_user_id):
+                bot.send_message(requester_room, f"🗑️ **@{target_real_name}** ko Admin list se hata diya.")
+            else:
+                bot.send_message(requester_room, f"⚠️ **@{target_real_name}** Admin list me nahi tha.")
+
+        # --- MODERATION ACTIONS ---
+        elif action_type == 'kick':
+            bot.send_json({"handler": "kickuser", "id": req_id, "roomid": room_id, "to": target_user_id})
+            bot.send_message(requester_room, f"👞 Kicking @{target_real_name}...")
+            
+        elif action_type == 'ban':
+            # Role: Outcast (Blacklist)
+            bot.send_json({"handler": "changerole", "id": req_id, "roomid": room_id, "targetid": target_user_id, "role": "outcast"})
+            bot.send_message(requester_room, f"🔨 Banning @{target_real_name} (Role: Outcast)...")
+            
+        elif action_type == 'unban':
+            # Role: Member (Wapas normal karna)
+            bot.send_json({"handler": "changerole", "id": req_id, "roomid": room_id, "targetid": target_user_id, "role": "member"})
+            bot.send_message(requester_room, f"🕊️ Unbanning @{target_real_name} (Role: Member)...")
+
+        elif action_type == 'mute':
+            bot.send_json({"handler": "muteuser", "id": req_id, "roomid": room_id, "to": target_user_id})
+            bot.send_message(requester_room, f"🤐 Muted @{target_real_name}.")
+
+        elif action_type == 'unmute':
+            bot.send_json({"handler": "unmuteuser", "id": req_id, "roomid": room_id, "to": target_user_id})
+            bot.send_message(requester_room, f"🔊 Unmuted @{target_real_name}.")
 
 # --- MAIN COMMAND HANDLER ---
 def handle_command(bot, command, room_id, user, args, data):
-    if not has_permission(user):
+    
+    user_id = data.get('userid', data.get('id'))
+    
+    # 1. PERMISSION CHECK
+    if not is_admin(bot, user_id, user):
         return False
 
     cmd = command.lower().strip()
     
-    action_map = {
-        'k': 'kick', 'kick': 'kick', 'b': 'ban', 'ban': 'ban',
-        'm': 'mute', 'mute': 'mute', 'um': 'unmute', 'unmute': 'unmute'
+    # --- 2. INVITE COMMAND (Direct) ---
+    if cmd in ['i', 'invite']:
+        if not args:
+            bot.send_message(room_id, "Usage: `!i @username`")
+            return True
+        
+        target = args[0].replace("@", "").strip()
+        bot.send_json({
+            "handler": "chatroominvite",
+            "id": uuid.uuid4().hex,
+            "roomid": room_id,
+            "to": target 
+        })
+        bot.send_message(room_id, f"📨 Invited: @{target}")
+        return True
+
+    # --- 3. COMMANDS JO ID MAANGTE HAIN ---
+    valid_cmds = {
+        'mas': 'mas',          # Add DB Admin
+        'rmas': 'rmas',        # Remove DB Admin
+        'k': 'kick', 'kick': 'kick', 
+        'b': 'ban', 'ban': 'ban',
+        'ub': 'unban', 'unban': 'unban', # New Command
+        'm': 'mute', 'mute': 'mute', 
+        'um': 'unmute', 'unmute': 'unmute'
     }
 
-    if cmd in action_map:
+    if cmd in valid_cmds:
         if not args:
-            bot.send_message(room_id, f"Usage: `!{cmd} [username]`")
+            bot.send_message(room_id, f"Usage: !{cmd} @username")
             return True
 
-        target_username = args[0]
-        action = action_map[cmd]
+        target_clean = args[0].replace("@", "").lower().strip()
+        action = valid_cmds[cmd]
         
-        # 1. Send a request to get the user list
-        request_id = uuid.uuid4().hex
+        # Step 1: User List Request
         bot.send_json({
             "handler": "getusers",
-            "id": request_id,
+            "id": uuid.uuid4().hex,
             "roomid": room_id
         })
 
-        # 2. Store the pending action
-        with actions_lock:
-            pending_actions[request_id] = {
-                "target_username": target_username,
+        # Step 2: Store Pending Action
+        with action_lock:
+            pending_room_actions[str(room_id)] = {
+                "target_clean": target_clean,
                 "action": action,
                 "room_id": room_id,
                 "timestamp": time.time()
             }
-        
-        bot.send_message(room_id, f"🔍 Finding user '@{target_username}'...")
-        
-        # Optional: Timeout cleanup for pending actions
-        # (A separate thread could clean actions older than ACTION_TIMEOUT)
-        
         return True
 
     return False
