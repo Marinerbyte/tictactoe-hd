@@ -5,13 +5,13 @@ import sys
 import os
 from PIL import ImageDraw
 
-# --- UTILS IMPORT (Graphics & Network) ---
+# --- UTILS IMPORT ---
 try:
     import utils
 except ImportError:
     print("[Mines] Error: utils.py not found!")
 
-# --- DB IMPORT (Economy) ---
+# --- DB IMPORT ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from db import add_game_result
@@ -19,91 +19,182 @@ except Exception as e:
     print(f"DB Import Error: {e}")
 
 # --- GLOBAL VARIABLES ---
-games = {}           # Active Games in Rooms
-setup_pending = {}   # Users jo abhi DM me bomb set kar rahe hain {user_id: room_id}
+games = {}
+setup_pending = {}
 game_lock = threading.Lock()
 BOT_INSTANCE = None
 
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[CookieMines] Loaded successfully.")
+    print("[CookieMines] Pro Visuals Loaded.")
 
-# --- 🎨 VISUAL ENGINE (The Artist) ---
+# ==========================================
+# 🎨 ARTIST SECTION (New Graphics)
+# ==========================================
 
-def draw_mine_board(board_config, revealed_list, lives_p1, lives_p2, current_turn_name, is_game_over=False):
+def draw_enhanced_board(board_config, revealed_list, lives_p1, lives_p2, current_turn_name, p1_name, p2_name, is_game_over=False):
     """
-    12-Grid Board banata hai.
-    board_config: Kahan bomb hai (True/False list)
-    revealed_list: Kahan click kiya gaya (True/False list)
+    Board with Cute Borders, Clear Status & Stickers
     """
-    W, H = 500, 600
+    W, H = 500, 650
     
-    # 1. Background (Dark Casino Style)
-    img = utils.get_gradient(W, H, (30, 30, 40), (10, 10, 15))
+    # 1. Background (Deep Purple Casino Theme)
+    img = utils.get_gradient(W, H, (40, 30, 60), (20, 15, 30))
     d = ImageDraw.Draw(img)
-
-    # 2. Header (Lives & Turn)
-    # P1 Lives (Left)
-    hearts_p1 = "❤️" * lives_p1 + "💀" * (3 - lives_p1)
-    utils.write_text(d, (20, 20), f"P1: {hearts_p1}", size=20, align="left")
     
-    # P2 Lives (Right)
-    hearts_p2 = "❤️" * lives_p2 + "💀" * (3 - lives_p2)
-    utils.write_text(d, (480, 20), f"P2: {hearts_p2}", size=20, align="right")
+    # 2. Cute Border
+    d.rectangle([5, 5, W-5, H-5], outline="#FFD700", width=4)
+    d.rectangle([10, 10, W-10, H-10], outline="#FFA500", width=2)
 
-    # Turn Info
-    status_text = f"Turn: @{current_turn_name}" if not is_game_over else "GAME OVER"
-    status_col = "#FFD700" if not is_game_over else "#FF4444"
-    utils.write_text(d, (W//2, 60), status_text, size=30, align="center", col=status_col, shadow=True)
-
-    # 3. The Grid (3 Rows x 4 Columns)
-    # Assets load karo (Cache se fast aayenge)
-    cookie_img = utils.get_emoji("🍪", size=90)
-    bomb_img = utils.get_emoji("💥", size=90)
-    crumb_img = utils.get_emoji("🟤", size=40) # Crumbs for safe spot
+    # 3. Header (Scoreboard)
+    # Header Background
+    utils.draw_rounded_card(W-40, 80, 20, (0, 0, 0, 100)).paste(img, (20, 20)) # Masking trick
+    d.rounded_rectangle([20, 20, W-20, 100], radius=20, fill=(30, 20, 40), outline="#FF69B4", width=3)
     
-    start_x, start_y = 50, 120
-    box_w, box_h = 100, 100
-    gap = 20
+    # P1 Info
+    utils.write_text(d, (40, 35), f"@{p1_name[:10]}", size=18, col="#88CCFF")
+    hearts_p1 = "❤️" * lives_p1 + "❌" * (3 - lives_p1)
+    utils.write_text(d, (40, 60), hearts_p1, size=24)
+
+    # P2 Info
+    utils.write_text(d, (460, 35), f"@{p2_name[:10]}", size=18, col="#FF8888", align="right")
+    hearts_p2 = "❤️" * lives_p2 + "❌" * (3 - lives_p2)
+    utils.write_text(d, (460, 60), hearts_p2, size=24, align="right")
+
+    # Center VS/Turn
+    status_text = f"Turn:\n{current_turn_name}" if not is_game_over else "GAME\nOVER"
+    utils.write_text(d, (W//2, 60), status_text, size=22, align="center", col="#FFF", shadow=True)
+
+    # 4. The Grid
+    start_x, start_y = 50, 130
+    box_w, box_h = 90, 90
+    gap = 15
+    
+    # Assets
+    cookie_icon = utils.get_emoji("🍪", size=70)
+    bomb_icon = utils.get_emoji("💣", size=70) # Or "💥"
+    safe_icon = utils.get_emoji("😋", size=50)
+    locked_icon = utils.get_emoji("❓", size=50)
 
     for i in range(12):
         row = i // 4
         col = i % 4
-        
         x = start_x + (col * (box_w + gap))
         y = start_y + (row * (box_h + gap))
         
-        # Box Background
-        utils.draw_rounded_card(box_w, box_h, 15, (50, 50, 60)).paste(img, (x, y)) # Blend logic simulation
-        # Simple Rect fallback for speed
-        d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(50, 50, 60), outline=(80,80,90), width=2)
-
-        # Number Label (Always visible nicely)
-        utils.write_text(d, (x+10, y+5), str(i+1), size=18, col="#AAAAAA")
-
-        # LOGIC: Kya dikhana hai?
-        if not revealed_list[i]:
-            # Hidden hai -> Cookie dikhao
-            if cookie_img: img.paste(cookie_img, (x+5, y+5), cookie_img)
+        # Determine Box Style
+        is_revealed = revealed_list[i]
+        is_bomb = (board_config[i] == 1)
+        
+        if not is_revealed:
+            # LOCKED BOX
+            d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(60, 50, 80), outline="#9988AA", width=2)
+            if locked_icon: img.paste(locked_icon, (x+20, y+20), locked_icon)
+            # Number Overlay
+            utils.write_text(d, (x+75, y+70), str(i+1), size=16, col="#DDD", align="center")
+            
         else:
-            # Reveal ho chuka hai
-            if board_config[i] == 1: # BOMB THA!
-                d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(100, 30, 30)) # Red bg
-                if bomb_img: img.paste(bomb_img, (x+5, y+5), bomb_img)
-            else: # SAFE THA
-                d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(30, 80, 30)) # Green bg
-                utils.write_text(d, (x+50, y+50), "YUM!", size=20, align="center", col="#88FF88")
+            # REVEALED
+            if is_bomb:
+                # BOMB HIT (Red)
+                d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(180, 50, 50), outline="red", width=3)
+                if bomb_icon: img.paste(bomb_icon, (x+10, y+10), bomb_icon)
+            else:
+                # SAFE COOKIE (Green)
+                d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=15, fill=(50, 150, 80), outline="#00FF00", width=3)
+                if cookie_icon: img.paste(cookie_icon, (x+10, y+10), cookie_icon)
+                # Yum text
+                utils.write_text(d, (x+45, y+70), "YUM", size=14, col="white", align="center", shadow=True)
 
+    # Footer
+    utils.write_text(d, (W//2, 620), "Choose a box (1-12) to Eat!", size=18, col="#888", align="center")
+    
+    return img
+
+def draw_blast_card(victim_name, lives_left, avatar_url=None):
+    """
+    Funny Cartoon Blast Card when someone hits a bomb
+    """
+    W, H = 500, 400
+    # 1. Background (Explosion Gradient)
+    img = utils.get_gradient(W, H, (200, 50, 0), (50, 0, 0))
+    d = ImageDraw.Draw(img)
+    
+    # Random pattern
+    for _ in range(20):
+        x, y = random.randint(0, W), random.randint(0, H)
+        r = random.randint(5, 15)
+        d.ellipse([x, y, x+r, y+r], fill=(255, 100, 0))
+
+    # 2. Big Explosion Sticker
+    blast = utils.get_sticker("fire", size=150) # Using fire or explosion emoji
+    if not blast: blast = utils.get_emoji("💥", size=150)
+    
+    if blast:
+        img.paste(blast, (W//2 - 75, 50), blast)
+
+    # 3. Avatar Overlay (Burnt style)
+    if avatar_url:
+        av = utils.get_circle_avatar(avatar_url, size=100)
+        if av:
+            img.paste(av, (W//2 - 50, 150), av)
+            # Draw X eyes on avatar if possible, or just a red cross
+            d.line([W//2-30, 180, W//2+30, 220], fill="red", width=5)
+            d.line([W//2+30, 180, W//2-30, 220], fill="red", width=5)
+
+    # 4. Text
+    utils.write_text(d, (W//2, 280), "BOOM! 💥", size=50, align="center", col="yellow", shadow=True)
+    utils.write_text(d, (W//2, 340), f"@{victim_name} got roasted!", size=25, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 370), f"Lives Left: {lives_left}", size=20, align="center", col="#FFCCCC")
+    
+    return img
+
+def draw_mines_winner(winner_name, reward, avatar_url=None):
+    """
+    Celebration Card with Cookies & Trophies
+    """
+    W, H = 500, 600
+    # 1. Background (Gold/Winner)
+    img = utils.get_gradient(W, H, (60, 50, 10), (20, 20, 5))
+    d = ImageDraw.Draw(img)
+    
+    # 2. Confetti / Cookies Background
+    cookie = utils.get_emoji("🍪", size=40)
+    if cookie:
+        for _ in range(15):
+            x, y = random.randint(0, W), random.randint(0, H)
+            img.paste(cookie, (x, y), cookie)
+
+    # 3. Trophy
+    trophy = utils.get_sticker("win", size=180)
+    if not trophy: trophy = utils.get_emoji("🏆", size=180)
+    
+    if trophy:
+        img.paste(trophy, (W//2 - 90, 80), trophy)
+
+    # 4. Avatar
+    if avatar_url:
+        av = utils.get_circle_avatar(avatar_url, size=120)
+        if av:
+            img.paste(av, (W//2 - 60, 250), av)
+            d.ellipse([W//2-65, 245, W//2+65, 375], outline="#FFD700", width=5)
+
+    # 5. Text Info
+    utils.write_text(d, (W//2, 400), "WINNER!", size=60, align="center", col="#FFD700", shadow=True)
+    utils.write_text(d, (W//2, 480), f"@{winner_name}", size=40, align="center", col="white", shadow=True)
+    
+    if reward > 0:
+        utils.write_text(d, (W//2, 540), f"Won +{reward} Coins", size=30, align="center", col="#88FF88", shadow=True)
+    
     return img
 
 def draw_setup_board():
-    """Sirf DM ke liye reference board"""
+    """DM Setup Board"""
     W, H = 500, 400
     img = utils.get_gradient(W, H, (20,20,30), (10,10,10))
     d = ImageDraw.Draw(img)
-    utils.write_text(d, (W//2, 30), "Hide 3 Bombs", size=30, align="center", col="#FFD700")
-    utils.write_text(d, (W//2, 70), "Reply e.g.: '2 5 9'", size=20, align="center", col="white")
+    utils.write_text(d, (W//2, 30), "🤫 Hide 3 Bombs", size=30, align="center", col="#FFD700")
     
     start_x, start_y = 50, 100
     box_w, box_h = 90, 80
@@ -118,7 +209,9 @@ def draw_setup_board():
     
     return img
 
-# --- GAME LOGIC ---
+# ==========================================
+# ⚙️ GAME LOGIC
+# ==========================================
 
 class MinesGame:
     def __init__(self, room_id, p1_id, p1_name):
@@ -126,236 +219,183 @@ class MinesGame:
         self.p1_id = p1_id; self.p1_name = p1_name
         self.p2_id = None; self.p2_name = None
         
-        # State: 'waiting_join', 'setup_phase', 'playing'
+        # New: Store Avatar URLs for cards
+        self.p1_avatar = None
+        self.p2_avatar = None
+
         self.state = 'waiting_join'
         self.bet = 0
         
-        # Boards (12 slots: 0=Safe, 1=Bomb)
-        self.board_p1 = [0] * 12  # P1 ka board (Jisme P1 ne bomb chupaye)
-        self.board_p2 = [0] * 12  # P2 ka board
-        
-        # Revealed Status (Track clicks)
-        self.revealed_p1 = [False] * 12 # P2 ne P1 ke board pe kya khola
-        self.revealed_p2 = [False] * 12 # P1 ne P2 ke board pe kya khola
-        
-        # Lives
+        self.board_p1 = [0] * 12
+        self.board_p2 = [0] * 12
+        self.revealed_p1 = [False] * 12
+        self.revealed_p2 = [False] * 12
         self.lives_p1 = 3
         self.lives_p2 = 3
-        
-        # Setup Tracking
         self.p1_ready = False
         self.p2_ready = False
-        
-        self.turn = 'P1' # P1 starts eating
+        self.turn = 'P1'
         self.last_interaction = time.time()
 
     def touch(self): self.last_interaction = time.time()
 
-# --- COMMAND HANDLER ---
-
 def handle_command(bot, command, room_id, user, args, data):
     global games, setup_pending
-    
     user_id = data.get('userid', user)
+    # Extract Avatar
+    avatar_file = data.get("avatar")
+    avatar_url = f"https://cdn.howdies.app/avatar?image={avatar_file}" if avatar_file else None
+
     cmd = command.lower().strip()
     
-    # --- 1. GAME START & JOIN (Room Commands) ---
-    
+    # 1. CREATE
     if cmd == "mines":
-        # Check args for bet
-        bet_amount = 0
-        if args and args[0].isdigit():
-            bet_amount = int(args[0])
-
+        bet_amount = int(args[0]) if args and args[0].isdigit() else 0
         with game_lock:
-            if room_id in games:
-                bot.send_message(room_id, "⚠️ Game chal raha hai!")
-                return True
-            
+            if room_id in games: return True
             game = MinesGame(room_id, user_id, user)
             game.bet = bet_amount
-            
-            # Deduct Bet P1
-            if bet_amount > 0:
-                add_game_result(user_id, user, "mines", -bet_amount, is_win=False)
-
+            game.p1_avatar = avatar_url # Save Avatar
+            if bet_amount > 0: add_game_result(user_id, user, "mines", -bet_amount, False)
             games[room_id] = game
         
-        bot.send_message(room_id, f"💣 **Cookie Mines Created!**\nBet: {bet_amount}\nWaiting for Player 2 to type `!join`")
+        bot.send_message(room_id, f"💣 **Cookie Mines!** Bet: {bet_amount}\nWaiting for Player 2 (`!join`)")
         return True
 
+    # 2. JOIN
     if cmd == "join":
         with game_lock:
             game = games.get(room_id)
             if not game or game.state != 'waiting_join': return False
-            if str(game.p1_id) == str(user_id): return True # Self join check
+            if str(game.p1_id) == str(user_id): return True
 
-            # P2 Join Logic
             game.p2_id = user_id
             game.p2_name = user
+            game.p2_avatar = avatar_url # Save Avatar
             
-            # Deduct Bet P2
-            if game.bet > 0:
-                add_game_result(user_id, user, "mines", -game.bet, is_win=False)
-
+            if game.bet > 0: add_game_result(user_id, user, "mines", -game.bet, False)
             game.state = 'setup_phase'
-            
-            # Add to Pending Setup Map (Taaki DM pehchan sake)
             setup_pending[str(game.p1_id)] = room_id
             setup_pending[str(game.p2_id)] = room_id
             
-        # Send DMs
-        bot.send_message(room_id, "✅ **Match Found!** Check your DMs to set bombs. 🤫")
+        bot.send_message(room_id, "✅ **Match Found!** Check DM to set bombs. 🤫")
         
-        # Generate Reference Board
+        # DM Setup
         img = draw_setup_board()
         link = utils.upload(bot, img)
-        
-        dm_msg = "🤫 **Shhh! Setup Phase**\nReply with 3 numbers (1-12) to hide bombs.\nExample: `2 5 9`"
-        bot.send_dm_image(game.p1_name, link, dm_msg)
-        bot.send_dm_image(game.p2_name, link, dm_msg)
+        bot.send_dm_image(game.p1_name, link, "Hide 3 Bombs! Reply: `1 5 9`")
+        bot.send_dm_image(game.p2_name, link, "Hide 3 Bombs! Reply: `2 4 8`")
         return True
 
-    # --- 2. DM HANDLING (Hidden Setup) ---
-    
-    # Hum check karenge agar message DM hai aur user setup_pending list me hai
-    # Note: Howdies plugin system me usually DM ka 'room_id' alag hota hai ya handler 'privatemessage' hota hai.
-    # Agar ye normal chat handler se aa raha hai to hum check karenge:
-    
-    is_setup_msg = str(user_id) in setup_pending
-    
-    if is_setup_msg:
-        # User is in setup mode. Try to parse numbers.
-        # Sirf tab jab message me digits hon (Chat me bhi commands aa sakti hain)
-        # Hum assume kar rahe hain ki Setup ke waqt user sirf numbers bhejega.
-        
-        potential_nums = [int(s) for s in command.split() if s.isdigit()]
-        if len(potential_nums) == 0 and args:
-             potential_nums = [int(s) for s in args if s.isdigit()]
+    # 3. DM SETUP
+    if str(user_id) in setup_pending:
+        nums = [int(s) for s in command.split() if s.isdigit()]
+        if len(nums) == 0 and args: nums = [int(s) for s in args if s.isdigit()]
 
-        if len(potential_nums) == 3:
-            # Validate Range (1-12)
-            if all(1 <= n <= 12 for n in potential_nums) and len(set(potential_nums)) == 3:
-                # Valid Setup!
-                target_room = setup_pending[str(user_id)]
-                with game_lock:
-                    if target_room in games:
-                        game = games[target_room]
-                        
-                        # Indices fix (0-11)
-                        mine_indices = [n-1 for n in potential_nums]
-                        
-                        if str(user_id) == str(game.p1_id):
-                            for idx in mine_indices: game.board_p1[idx] = 1 # Set P1 Bombs
-                            game.p1_ready = True
-                            bot.send_dm(user, "✅ Bombs set! Waiting for opponent...")
-                        
-                        elif str(user_id) == str(game.p2_id):
-                            for idx in mine_indices: game.board_p2[idx] = 1 # Set P2 Bombs
-                            game.p2_ready = True
-                            bot.send_dm(user, "✅ Bombs set! Waiting for opponent...")
+        if len(nums) == 3 and all(1 <= n <= 12 for n in nums) and len(set(nums)) == 3:
+            rid = setup_pending[str(user_id)]
+            with game_lock:
+                if rid in games:
+                    g = games[rid]
+                    indices = [n-1 for n in nums]
+                    
+                    if str(user_id) == str(g.p1_id):
+                        for i in indices: g.board_p1[i] = 1
+                        g.p1_ready = True
+                        bot.send_dm(user, "✅ P1 Set!")
+                    elif str(user_id) == str(g.p2_id):
+                        for i in indices: g.board_p2[i] = 1
+                        g.p2_ready = True
+                        bot.send_dm(user, "✅ P2 Set!")
 
-                        # Check if Both Ready
-                        if game.p1_ready and game.p2_ready:
-                            game.state = 'playing'
-                            # Remove from pending
-                            if str(game.p1_id) in setup_pending: del setup_pending[str(game.p1_id)]
-                            if str(game.p2_id) in setup_pending: del setup_pending[str(game.p2_id)]
-                            
-                            # Announce Start in Room
-                            bot.send_message(target_room, "🔥 **Game Started!** Bombs are hidden.")
-                            
-                            # Show P1's Turn (P1 has to eat from P2's board)
-                            # Draw P2's board (Hidden)
-                            img = draw_mine_board(game.board_p2, game.revealed_p2, game.lives_p1, game.lives_p2, game.p1_name)
-                            link = utils.upload(bot, img)
-                            bot.send_json({"handler": "chatroommessage", "roomid": target_room, "type": "image", "url": link, "text": "Turn P1"})
-                            bot.send_message(target_room, f"@{game.p1_name}, Pick a cookie (1-12)!")
-                
-                return True # Command handled
-            else:
-                bot.send_dm(user, "❌ Invalid! Send 3 unique numbers between 1-12. (e.g., 1 2 3)")
-                return True
+                    if g.p1_ready and g.p2_ready:
+                        g.state = 'playing'
+                        del setup_pending[str(g.p1_id)]
+                        del setup_pending[str(g.p2_id)]
+                        
+                        bot.send_message(rid, "🔥 **Game Started!** Bombs hidden.")
+                        
+                        # Show Board (P1 Turn -> Show P2 Board)
+                        img = draw_enhanced_board(g.board_p2, g.revealed_p2, g.lives_p1, g.lives_p2, g.p1_name, g.p1_name, g.p2_name)
+                        link = utils.upload(bot, img)
+                        bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "Start"})
+                        bot.send_message(rid, f"@{g.p1_name}, Pick a number (1-12)!")
+            return True
 
-    # --- 3. GAMEPLAY (Room Moves) ---
-    
+    # 4. GAMEPLAY
     with game_lock:
         game = games.get(room_id)
         if not game or game.state != 'playing': return False
 
-        # Only process numbers 1-12
         if cmd.isdigit() and 1 <= int(cmd) <= 12:
             choice = int(cmd) - 1
             game.touch()
 
-            # Identify Player & Logic
-            is_p1_turn = (game.turn == 'P1')
-            
-            if is_p1_turn and str(user_id) != str(game.p1_id): return False
-            if not is_p1_turn and str(user_id) != str(game.p2_id): return False
+            is_p1 = (game.turn == 'P1')
+            if is_p1 and str(user_id) != str(game.p1_id): return False
+            if not is_p1 and str(user_id) != str(game.p2_id): return False
 
-            # Select correct board arrays
-            # P1 khayega P2 ke board se
-            target_board = game.board_p2 if is_p1_turn else game.board_p1
-            revealed_status = game.revealed_p2 if is_p1_turn else game.revealed_p1
+            # Determine Target Board
+            tgt_board = game.board_p2 if is_p1 else game.board_p1
+            tgt_reveal = game.revealed_p2 if is_p1 else game.revealed_p1
             
-            # Check if already clicked
-            if revealed_status[choice]:
-                bot.send_message(room_id, "🚫 Already eaten! Pick another.")
-                return True
+            if tgt_reveal[choice]: return True # Already clicked
 
-            # REVEAL LOGIC
-            revealed_status[choice] = True
-            hit_bomb = (target_board[choice] == 1)
+            # Update State
+            tgt_reveal[choice] = True
+            hit_bomb = (tgt_board[choice] == 1)
             
-            msg_extra = ""
+            current_player_name = game.p1_name if is_p1 else game.p2_name
+            current_player_av = game.p1_avatar if is_p1 else game.p2_avatar
             
+            # --- ACTION: BOMB HIT ---
             if hit_bomb:
-                msg_extra = "💥 **BOOM!** Found a bomb!"
-                if is_p1_turn: game.lives_p1 -= 1
+                if is_p1: game.lives_p1 -= 1
                 else: game.lives_p2 -= 1
-            else:
-                msg_extra = "😋 **Safe!** Yummy cookie."
+                
+                lives_left = game.lives_p1 if is_p1 else game.lives_p2
+                
+                # 1. SEND FUNNY BLAST CARD
+                blast_img = draw_blast_card(current_player_name, lives_left, current_player_av)
+                blast_link = utils.upload(bot, blast_img)
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": blast_link, "text": "BOOM"})
 
-            # CHECK GAME OVER
-            winner = None
-            if game.lives_p1 == 0: winner = game.p2_name; winner_id = game.p2_id
-            elif game.lives_p2 == 0: winner = game.p1_name; winner_id = game.p1_id
+            # CHECK WINNER
+            winner, win_id, win_av = None, None, None
+            if game.lives_p1 == 0: 
+                winner = game.p2_name; win_id = game.p2_id; win_av = game.p2_avatar
+            elif game.lives_p2 == 0: 
+                winner = game.p1_name; win_id = game.p1_id; win_av = game.p1_avatar
 
             if winner:
-                # Game Over Image
-                # Final state dikhao
-                img = draw_mine_board(target_board, revealed_status, game.lives_p1, game.lives_p2, winner, is_game_over=True)
-                link = utils.upload(bot, img)
-                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "GameOver"})
-                
-                # Payout
+                # REWARD
                 reward = game.bet * 2 if game.bet > 0 else 0
-                if reward > 0:
-                    add_game_result(winner_id, winner, "mines", reward, is_win=True)
-                    bot.send_message(room_id, f"🏆 **{winner} WINS!** Won {reward} Coins.")
-                else:
-                    add_game_result(winner_id, winner, "mines", 0, is_win=True)
-                    bot.send_message(room_id, f"🏆 **{winner} WINS!**")
+                add_game_result(win_id, winner, "mines", reward, True)
                 
-                # Cleanup
+                # WINNER CARD (Game Over)
+                # Show final board first? No, show Winner Card directly
+                win_img = draw_mines_winner(winner, reward, win_av)
+                win_link = utils.upload(bot, win_img)
+                
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": win_link, "text": "Winner"})
+                bot.send_message(room_id, f"🎉 **GAME OVER!** {winner} wins!")
+                
                 del games[room_id]
                 return True
+
+            # NEXT TURN
+            game.turn = 'P2' if is_p1 else 'P1'
+            next_p = game.p2_name if is_p1 else game.p1_name
             
-            # SWITCH TURN
-            game.turn = 'P2' if is_p1_turn else 'P1'
-            next_player = game.p2_name if is_p1_turn else game.p1_name
+            # Draw Next State
+            next_tgt_board = game.board_p1 if is_p1 else game.board_p2
+            next_tgt_reveal = game.revealed_p1 if is_p1 else game.revealed_p2
             
-            # Draw Next State (Opponent's board dikhana hai ab)
-            # Agar ab P2 ki baari hai, to P1 ka board dikhao (game.board_p1)
-            next_target_board = game.board_p1 if is_p1_turn else game.board_p2
-            next_revealed = game.revealed_p1 if is_p1_turn else game.revealed_p2
-            
-            img = draw_mine_board(next_target_board, next_revealed, game.lives_p1, game.lives_p2, next_player)
+            img = draw_enhanced_board(next_tgt_board, next_tgt_reveal, game.lives_p1, game.lives_p2, next_p, game.p1_name, game.p2_name)
             link = utils.upload(bot, img)
             
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "NextTurn"})
-            bot.send_message(room_id, f"{msg_extra}\n@{next_player}, Your turn! (1-12)")
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Turn"})
+            bot.send_message(room_id, f"@{next_p}, Your turn! (1-12)")
             return True
 
     return False
