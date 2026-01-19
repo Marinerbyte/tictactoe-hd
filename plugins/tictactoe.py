@@ -259,7 +259,7 @@ def handle_command(bot, command, room_id, user, args, data):
                         img = draw_pro_board(game.board, game.p1_name, "Bot", game.turn)
                         link = utils.upload(bot, img)
                         
-                        bot.send_dm_image(game.p1_name, link, "Game Started!") # DM bhi bhej sakte hain optional
+                        # Note: DM removed as requested
                         bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Game Start"})
                     else:
                         game.state = 'waiting_join'
