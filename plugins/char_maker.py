@@ -1,197 +1,301 @@
 import sys
 import os
 import random
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps, ImageChops
 
 # --- IMPORTS ---
 try: import utils
 except ImportError: print("[CharMaker] Error: utils.py not found!")
 
+# --- STATE ---
+char_drafts = {}
+
 def setup(bot):
-    print("[CharMaker] Character Engine Loaded.")
+    print("[CharMaker] Infinite Style Engine Loaded.")
 
 # ==========================================
-# 🧠 SMART STYLE SELECTOR
+# 🧠 SMART ASSET INTELLIGENCE
 # ==========================================
 
-def get_smart_avatar_url(seed, description):
+def analyze_style(description):
     """
-    Description ke hisaab se best Avatar Style chunta hai.
+    Description se Vibe, Palette aur Avatar Style nikalta hai.
     """
     desc = description.lower()
     
-    # Style Mapping
-    if any(x in desc for x in ["robot", "bot", "cyborg", "tech", "mech"]):
-        style = "bottts" # Robots
-    elif any(x in desc for x in ["cute", "kid", "baby", "chibi", "kawaii"]):
-        style = "fun-emoji" # Cute round faces
-    elif any(x in desc for x in ["women", "girl", "lady", "female", "beauty"]):
-        style = "lorelei" # Beautiful artistic style
-    elif any(x in desc for x in ["sketch", "art", "drawing", "black", "white"]):
-        style = "notionists" # Notion style sketch
-    elif any(x in desc for x in ["monster", "ghost", "alien", "scary", "creepy"]):
-        style = "thumbs" # Funny/Weird creatures
-    else:
-        # Default Cool Style
-        style = "adventurer" 
+    # Defaults
+    style = "adventurer"
+    bg_mode = "splatter"
+    palette = ["#FFD700", "#FF4500", "#1E90FF"] # Standard Gold/Red/Blue
+    
+    # 1. TECH / SCI-FI
+    if any(x in desc for x in ["robot", "bot", "mech", "cyborg", "tech", "ai", "future", "cyber"]):
+        style = "bottts"
+        bg_mode = "cyber"
+        palette = ["#00FFFF", "#FF00FF", "#00FF00"] # Neon
+        
+    # 2. CUTE / ANIME
+    elif any(x in desc for x in ["cute", "kawaii", "baby", "kid", "chibi", "soft", "love"]):
+        style = "fun-emoji"
+        bg_mode = "pastel"
+        palette = ["#FFB6C1", "#87CEEB", "#E6E6FA"] # Pink/Blue/Lavender
+        
+    # 3. HORROR / DARK
+    elif any(x in desc for x in ["ghost", "zombie", "dead", "scary", "horror", "monster", "demon", "evil"]):
+        style = "thumbs" # Weird shapes
+        if "zombie" in desc: style = "avataaars" # Can config for zombie skin later
+        bg_mode = "horror"
+        palette = ["#8B0000", "#2F4F4F", "#000000"] # Blood Red/Dark
+        
+    # 4. ARTISTIC / SKETCH
+    elif any(x in desc for x in ["art", "sketch", "draw", "paint", "pencil", "paper"]):
+        style = "notionists"
+        bg_mode = "paper"
+        palette = ["#000000", "#555555", "#FFFFFF"] # Grayscale
+        
+    # 5. RETRO / GAMER
+    elif any(x in desc for x in ["pixel", "game", "retro", "8bit", "arcade"]):
+        style = "pixel-art"
+        bg_mode = "pixel"
+        palette = ["#FF0000", "#0000FF", "#FFFF00"] # Primary
+        
+    # 6. FEMALE / BEAUTY
+    elif any(x in desc for x in ["girl", "woman", "lady", "queen", "princess", "beauty"]):
+        style = "lorelei"
+        bg_mode = "splatter"
+        palette = ["#FF1493", "#9400D3", "#FFD700"]
+        
+    # 7. MALE / COOL
+    elif any(x in desc for x in ["boy", "man", "king", "cool", "hero", "guy"]):
+        style = "adventurer"
+        bg_mode = "galaxy"
+        palette = ["#FFD700", "#191970", "#4B0082"]
 
+    return style, bg_mode, palette
+
+def get_avatar_url(seed, style):
+    # DiceBear API v9
     return f"https://api.dicebear.com/9.x/{style}/png?seed={seed}&backgroundColor=transparent&size=1024"
 
 # ==========================================
-# 🎨 PAINT SPLATTER & EFFECTS ENGINE
+# 🎨 BACKGROUND GENERATORS
 # ==========================================
 
-def create_splatter_background(W, H):
-    """
-    Random Colour Ke Chinte (Paint Splatter) Effect banata hai.
-    """
-    # 1. Dark Base
-    base_color = random.choice([(20, 20, 30), (30, 10, 10), (10, 30, 20), (15, 15, 20)])
-    img = Image.new("RGBA", (W, H), base_color)
+def bg_cyber_grid(W, H, palette):
+    """Tron Style Neon Grid"""
+    img = Image.new("RGBA", (W, H), (10, 5, 20)) # Dark Purple base
     d = ImageDraw.Draw(img)
     
-    # 2. Random Neon Splatters
-    palettes = [
-        ["#FF00FF", "#00FFFF", "#FFFF00"], # Cyberpunk
-        ["#FF4500", "#FFD700", "#FF69B4"], # Sunset
-        ["#00FF00", "#ADFF2F", "#00FA9A"], # Toxic
-        ["#1E90FF", "#00BFFF", "#87CEEB"]  # Ocean
-    ]
-    colors = random.choice(palettes)
+    # Grid
+    step = 50
+    grid_col = palette[0]
     
-    # Draw random abstract shapes
-    for _ in range(20):
-        x = random.randint(-100, W+100)
-        y = random.randint(-100, H+100)
-        size = random.randint(50, 300)
-        color = random.choice(colors)
+    # Perspective Grid effect (Basic)
+    for i in range(0, W, step):
+        d.line([(i, 0), (i, H)], fill=grid_col, width=1)
+    for i in range(0, H, step):
+        d.line([(0, i), (W, i)], fill=grid_col, width=1)
         
-        shape_type = random.choice(["circle", "rect", "line"])
-        
-        # Create a separate layer for each splash to control transparency
-        splash = Image.new("RGBA", (W, H), (0,0,0,0))
-        ds = ImageDraw.Draw(splash)
-        
-        fill_col = color + "40" # Hex + Alpha (Low opacity)
-        
-        if shape_type == "circle":
-            ds.ellipse([x, y, x+size, y+size], fill=color)
-        elif shape_type == "rect":
-            ds.rectangle([x, y, x+size, y+size/2], fill=color)
-            
-        # Blur the splash for "Glow" effect
-        splash = splash.filter(ImageFilter.GaussianBlur(30))
-        img.paste(splash, (0,0), splash)
-
-    # 3. Noise Texture (Grain)
-    noise = Image.effect_noise((W, H), 10).convert("RGBA")
-    noise.putalpha(30) # Very subtle
-    img.paste(noise, (0,0), noise)
+    # Glow Overlay
+    glow = Image.new("RGBA", (W, H), (0,0,0,0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([100, 100, W-100, H-100], fill=palette[1]+"40") # Hex + Alpha
+    glow = glow.filter(ImageFilter.GaussianBlur(80))
     
+    img.paste(glow, (0,0), glow)
     return img
 
-def apply_glitch_effect(img, shift=5):
-    """Thoda sa 3D Glitch effect deta hai"""
-    r, g, b, a = img.split()
-    r = ImageOps.colorize(r.convert("L"), (0,0,0), (255,0,0)).convert("RGBA")
-    b = ImageOps.colorize(b.convert("L"), (0,0,0), (0,0,255)).convert("RGBA")
+def bg_horror_fog(W, H, palette):
+    """Scary Dark Fog"""
+    img = Image.new("RGBA", (W, H), (5, 0, 0)) # Pitch Black
     
-    # Shift channels
-    final = Image.new("RGBA", img.size)
-    final.paste(r, (shift, 0), r)
-    final.paste(b, (-shift, 0), b)
+    # Red/Grey Fog
+    fog = Image.new("RGBA", (W, H), (0,0,0,0))
+    d = ImageDraw.Draw(fog)
     
-    # Original green/alpha on top
-    final = Image.alpha_composite(final, img)
-    return final
+    for _ in range(15):
+        x = random.randint(-100, W)
+        y = random.randint(-100, H)
+        s = random.randint(200, 500)
+        col = random.choice([palette[0], "#333333"])
+        d.ellipse([x, y, x+s, y+s], fill=col)
+        
+    fog = fog.filter(ImageFilter.GaussianBlur(60))
+    img.paste(fog, (0,0), fog)
+    
+    # Scratches
+    d = ImageDraw.Draw(img)
+    for _ in range(50):
+        x1 = random.randint(0, W); y1 = random.randint(0, H)
+        d.line([x1, y1, x1+random.randint(-20, 20), y1+random.randint(-20,20)], fill=(100,100,100,100), width=1)
+        
+    return img
+
+def bg_splatter_art(W, H, palette):
+    """Original Splatter Art"""
+    img = Image.new("RGBA", (W, H), (20, 20, 25))
+    
+    for _ in range(25):
+        x = random.randint(-100, W)
+        y = random.randint(-100, H)
+        s = random.randint(50, 300)
+        col = random.choice(palette)
+        
+        splash = Image.new("RGBA", (W, H), (0,0,0,0))
+        d = ImageDraw.Draw(splash)
+        
+        shape = random.choice(["circle", "rect", "tri"])
+        if shape == "circle": d.ellipse([x,y,x+s,y+s], fill=col)
+        elif shape == "rect": d.rectangle([x,y,x+s,y+s/2], fill=col)
+        else: d.polygon([(x,y), (x+s,y+s), (x-s,y+s)], fill=col)
+            
+        splash = splash.filter(ImageFilter.GaussianBlur(35))
+        img.paste(splash, (0,0), splash)
+        
+    return img
+
+def bg_pastel_dream(W, H, palette):
+    """Soft Clouds"""
+    img = utils.get_gradient(W, H, (255, 230, 230), (230, 230, 255))
+    
+    clouds = Image.new("RGBA", (W, H), (0,0,0,0))
+    d = ImageDraw.Draw(clouds)
+    
+    for _ in range(10):
+        x = random.randint(0, W)
+        y = random.randint(0, H)
+        s = random.randint(200, 400)
+        d.ellipse([x,y,x+s,y+s], fill="white")
+        
+    clouds = clouds.filter(ImageFilter.GaussianBlur(50))
+    img.paste(clouds, (0,0), clouds)
+    return img
+
+def generate_background(W, H, mode, palette):
+    if mode == "cyber": return bg_cyber_grid(W, H, palette)
+    if mode == "horror": return bg_horror_fog(W, H, palette)
+    if mode == "pastel": return bg_pastel_dream(W, H, palette)
+    return bg_splatter_art(W, H, palette)
 
 # ==========================================
-# 🖼️ CARD GENERATOR
+# 🖼️ MASTER CARD CREATOR
 # ==========================================
 
 def draw_character_card(username, description):
-    W, H = 600, 800 # Portrait Poster Style
+    W, H = 600, 800
     
-    # 1. Background (Splatter Effect)
-    img = create_splatter_background(W, H)
+    # 1. Analyze & Prepare
+    style, bg_mode, palette = analyze_style(description)
+    accent_col = palette[0]
+    
+    # 2. Generate Background
+    img = generate_background(W, H, bg_mode, palette)
     d = ImageDraw.Draw(img)
     
-    # 2. Border (Stylish Frame)
-    m = 20
-    d.rectangle([m, m, W-m, H-m], outline="white", width=2)
-    # Corner Accents
-    line_len = 60
-    d.line([m, m, m+line_len, m], fill="#FFD700", width=6) # Top Left
-    d.line([m, m, m, m+line_len], fill="#FFD700", width=6)
-    d.line([W-m, H-m, W-m-line_len, H-m], fill="#FFD700", width=6) # Bottom Right
-    d.line([W-m, H-m, W-m, H-m-line_len], fill="#FFD700", width=6)
-
-    # 3. Avatar Generation
-    avatar_url = get_smart_avatar_url(username, description)
+    # 3. Avatar Fetching
+    avatar_url = get_avatar_url(username, style)
     avatar = utils.get_image(avatar_url)
     
     if avatar:
-        avatar = avatar.resize((500, 500))
-        
-        # Back Glow behind Avatar
-        glow = Image.new("RGBA", (500, 500), (0,0,0,0))
+        avatar = avatar.resize((550, 550))
+        # Back Glow
+        glow = Image.new("RGBA", (W, H), (0,0,0,0))
         gd = ImageDraw.Draw(glow)
-        gd.ellipse([50, 50, 450, 450], fill=(255, 255, 255, 80))
-        glow = glow.filter(ImageFilter.GaussianBlur(60))
-        img.paste(glow, (50, 100), glow)
+        gd.ellipse([50, 100, 550, 600], fill=palette[1]+"60") # Hex + Alpha
+        glow = glow.filter(ImageFilter.GaussianBlur(50))
+        img.paste(glow, (0,0), glow)
         
-        # Place Avatar
-        img.paste(avatar, (50, 120), avatar)
+        # Paste Avatar
+        img.paste(avatar, (25, 80), avatar)
 
-    # 4. Text Overlay
-    # Name Plate Background
-    d.polygon([(0, 600), (W, 550), (W, H), (0, H)], fill=(0, 0, 0, 200))
+    # 4. UI Elements (The Frame)
+    m = 20
+    # Cyber Frame
+    if bg_mode == "cyber":
+        d.rectangle([m, m, W-m, H-m], outline=accent_col, width=3)
+        d.line([m, m+100, m, m], fill=accent_col, width=8) # Corner
+        d.line([m, m, m+100, m], fill=accent_col, width=8)
+    # Elegant Frame
+    else:
+        d.rounded_rectangle([m, m, W-m, H-m], radius=0, outline="white", width=2)
+        d.line([W-m, H-m-100, W-m, H-m], fill=accent_col, width=8)
+        d.line([W-m-100, H-m, W-m, H-m], fill=accent_col, width=8)
+
+    # 5. Name Plate
+    # Slanted background for text
+    poly = [(0, 600), (W, 560), (W, H), (0, H)]
+    d.polygon(poly, fill=(10, 10, 15, 220))
+    d.line([(0, 600), (W, 560)], fill=accent_col, width=4)
     
-    # Username (Big & Bold)
-    utils.write_text(d, (W//2, 630), username.upper(), size=50, align="center", col="#00FFFF", shadow=True)
+    # Username
+    utils.write_text(d, (W//2, 630), username.upper(), size=50, align="center", col="white", shadow=True)
     
-    # Description / Role
-    tags = description.split()[:3] # First 3 words as tags
-    tag_text = "  |  ".join([t.upper() for t in tags])
-    utils.write_text(d, (W//2, 690), f"⚡ {tag_text} ⚡", size=25, align="center", col="#FFD700")
+    # Stats / Tags
+    # Rarity Logic
+    rarity = "COMMON"
+    rar_col = "#AAAAAA"
+    if "king" in description or "god" in description: rarity = "LEGENDARY"; rar_col = "#FFD700"
+    elif "robot" in description or "pro" in description: rarity = "EPIC"; rar_col = "#9400D3"
     
-    # Footer
-    utils.write_text(d, (W//2, 750), "GENERATED CHARACTER", size=16, align="center", col="#888")
+    utils.write_text(d, (W//2, 690), f"♦ {rarity} ♦", size=24, align="center", col=rar_col)
+    
+    # Attributes
+    tags = description.split()[:3]
+    tag_str = " | ".join(t.upper() for t in tags)
+    utils.write_text(d, (W//2, 730), tag_str, size=18, align="center", col="#CCCCCC")
 
     return img
 
 # ==========================================
-# ⚙️ HANDLER
+# ⚙️ COMMAND HANDLER
 # ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
+    user_id = data.get('userid', user)
     
+    # 1. CREATE
     if cmd == "char":
         if len(args) < 2:
-            bot.send_message(room_id, "Usage: `!char <username> <description>`\nExample: `!char yasin cute robot`")
+            bot.send_message(room_id, "Usage: `!char <username> <style>`\nStyles: Robot, Cute, Sketch, Horror, Cool...")
             return True
             
-        target_name = args[0].replace("@", "")
-        description = " ".join(args[1:])
+        target = args[0].replace("@", "")
+        desc = " ".join(args[1:])
         
-        bot.send_message(room_id, f"🎨 **Painting Character:** {target_name} ({description})...")
+        bot.send_message(room_id, f"🎨 **Summoning:** {target} ({desc})...")
         
         try:
-            # Generate Art
-            img = draw_character_card(target_name, description)
+            img = draw_character_card(target, desc)
             link = utils.upload(bot, img)
             
             if link:
+                char_drafts[user_id] = link
                 bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Character"})
-                bot.send_message(room_id, f"🔥 Here is **{target_name}'s** Avatar!")
+                bot.send_message(room_id, f"✨ Created! Type `!share @user` to gift.")
             else:
-                bot.send_message(room_id, "❌ Creation failed.")
-                
+                bot.send_message(room_id, "❌ Render failed.")
         except Exception as e:
             print(f"Char Error: {e}")
-            bot.send_message(room_id, "⚠️ Error in art engine.")
+            bot.send_message(room_id, "⚠️ Art Engine Error.")
             
         return True
+
+    # 2. SHARE
+    if cmd == "share":
+        # Check Char Drafts First
+        if user_id in char_drafts:
+            if not args:
+                bot.send_message(room_id, "Usage: `!share @username`")
+                return True
+                
+            target = args[0].replace("@", "")
+            link = char_drafts[user_id]
+            
+            bot.send_dm_image(target, link, f"🃏 **Legendary Card from @{user}**")
+            bot.send_message(room_id, f"✅ Card gifted to @{target}!")
+            return True
+            
+        return False # Fallback to other plugins
 
     return False
