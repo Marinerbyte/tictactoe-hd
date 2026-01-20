@@ -21,7 +21,7 @@ games = {}; setup_pending = {}; game_lock = threading.Lock(); BOT_INSTANCE = Non
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[CookieMines] 3D Square Edition Loaded.")
+    print("[CookieMines] Final 3D Fixed.")
 
 # --- CLEANUP ---
 def game_cleanup_loop():
@@ -44,58 +44,44 @@ def game_cleanup_loop():
 if threading.active_count() < 10: threading.Thread(target=game_cleanup_loop, daemon=True).start()
 
 # ==========================================
-# 🎨 3D ARTIST SECTION (Square 1:1)
+# 🎨 3D ARTIST SECTION
 # ==========================================
 
 def draw_3d_button(d, x, y, w, h, color, outline, text=None, text_col="white", press=False):
     """Helper to draw 3D buttons"""
     shadow = (max(0, color[0]-30), max(0, color[1]-30), max(0, color[2]-30))
-    highlight = (min(255, color[0]+30), min(255, color[1]+30), min(255, color[2]+30))
-    
     if not press:
-        # Depth (Bottom Layer)
-        d.rounded_rectangle([x, y+4, x+w, y+h+4], radius=10, fill=shadow)
-        # Main Surface
-        d.rounded_rectangle([x, y, x+w, y+h], radius=10, fill=color, outline=outline, width=1)
-        # Highlight (Top)
-        d.rectangle([x+5, y+2, x+w-5, y+15], fill=(255,255,255, 30))
-        
+        d.rounded_rectangle([x, y+4, x+w, y+h+4], radius=10, fill=shadow) # Shadow
+        d.rounded_rectangle([x, y, x+w, y+h], radius=10, fill=color, outline=outline, width=1) # Main
+        d.rectangle([x+5, y+2, x+w-5, y+15], fill=(255,255,255, 30)) # Highlight
         if text: utils.write_text(d, (x+w//2, y+h//2), text, size=24, align="center", col=text_col, shadow=True)
     else:
-        # Pressed State (Flat)
         d.rounded_rectangle([x, y+4, x+w, y+h+4], radius=10, fill=color, outline=outline, width=2)
         if text: utils.write_text(d, (x+w//2, y+h//2 + 4), text, size=24, align="center", col=text_col)
 
 def draw_enhanced_board(board_config, revealed_list, lives_p1, lives_p2, current_turn_name, p1_name, p2_name, is_game_over=False):
-    # 1:1 SQUARE SIZE (Perfect for DM & Room)
     W, H = 500, 500
-    img = utils.create_canvas(W, H, color=(30, 32, 40)) # Elegant Dark
+    img = utils.create_canvas(W, H, color=(30, 32, 40)) 
     d = ImageDraw.Draw(img)
     
-    # 1. HEADER (Top 80px)
-    # P1 (Left)
+    # 1. HEADER
     is_p1 = (current_turn_name == p1_name and not is_game_over)
     col1 = (50, 80, 50) if is_p1 else (40, 40, 45)
     out1 = "#00FF00" if is_p1 else "#555"
-    
     d.rounded_rectangle([10, 10, 180, 70], radius=10, fill=col1, outline=out1, width=2)
     utils.write_text(d, (95, 25), f"@{p1_name[:7]}", size=18, align="center", col="white")
     utils.write_text(d, (95, 48), "❤️" * lives_p1, size=16, align="center")
 
-    # P2 (Right)
     is_p2 = (current_turn_name == p2_name and not is_game_over)
     col2 = (50, 80, 50) if is_p2 else (40, 40, 45)
     out2 = "#00FF00" if is_p2 else "#555"
-    
     d.rounded_rectangle([320, 10, 490, 70], radius=10, fill=col2, outline=out2, width=2)
     utils.write_text(d, (405, 25), f"@{p2_name[:7]}", size=18, align="center", col="white")
     utils.write_text(d, (405, 48), "❤️" * lives_p2, size=16, align="center")
 
-    # VS Badge
     utils.write_text(d, (W//2, 40), "VS", size=26, align="center", col="#FFD700", shadow=True)
 
-    # 2. GRID (Centered)
-    # Grid starts at y=90 to fit in 500px
+    # 2. GRID
     start_x, start_y = 55, 90
     box_w, box_h = 85, 85
     gap = 15
@@ -108,19 +94,13 @@ def draw_enhanced_board(board_config, revealed_list, lives_p1, lives_p2, current
         x = start_x + (col * (box_w + gap))
         y = start_y + (row * (box_h + gap))
         
-        is_rev = revealed_list[i]
-        
-        if not is_rev:
-            # LOCKED (3D Blue Button)
+        if not revealed_list[i]:
             draw_3d_button(d, x, y, box_w, box_h, (60, 70, 100), "#8899AA", str(i+1))
         else:
-            # REVEALED
             if board_config[i] == 1:
-                # BOMB (Red Flat)
                 d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=10, fill=(180, 40, 40), outline="#FF0000", width=3)
                 if bomb: img.paste(bomb, (x+15, y+15), bomb)
             else:
-                # SAFE (Green Flat)
                 d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=10, fill=(40, 140, 60), outline="#00FF00", width=3)
                 if cookie: img.paste(cookie, (x+15, y+15), cookie)
 
@@ -128,71 +108,47 @@ def draw_enhanced_board(board_config, revealed_list, lives_p1, lives_p2, current
     status = f"Turn: {current_turn_name}" if not is_game_over else "GAME OVER"
     s_col = "#FFD700" if not is_game_over else "#FF5555"
     utils.write_text(d, (W//2, 475), status, size=20, align="center", col=s_col, shadow=True)
-    
     return img
 
 def draw_winner_card(name, reward, avatar=None):
     W, H = 500, 500
     img = utils.create_canvas(W, H, (20, 10, 30))
     d = ImageDraw.Draw(img)
-    
-    # 1. Sunburst Effect
     for i in range(0, 360, 30):
         d.line([(W//2, H//2), (W//2 + 250, H//2 + 250)], fill=(255, 215, 0, 50), width=5)
-
-    # 2. Stickers
-    trophy = utils.get_emoji("👑", size=100) # Crown
+    trophy = utils.get_emoji("👑", size=100)
     if trophy: img.paste(trophy, (W//2 - 50, 30), trophy)
-    
-    money = utils.get_emoji("💰", size=60)
-    if money: 
-        img.paste(money, (50, 200), money)
-        img.paste(money, (400, 200), money)
-
-    # 3. Avatar
     if avatar:
         av = utils.get_circle_avatar(avatar, size=150)
         if av: 
             img.paste(av, (W//2 - 75, 140), av)
             d.ellipse([W//2-80, 135, W//2+80, 295], outline="#FFD700", width=6)
-
-    # 4. Text
     utils.write_text(d, (W//2, 330), "CHAMPION!", size=45, align="center", col="#FFD700", shadow=True)
     utils.write_text(d, (W//2, 380), f"@{name}", size=30, align="center", col="white", shadow=True)
     if reward > 0:
         utils.write_text(d, (W//2, 430), f"Won {reward} Coins", size=25, align="center", col="#00FF00")
-
     return img
 
 def draw_blast_card(name, lives, avatar=None):
     W, H = 500, 500
     img = utils.create_canvas(W, H, (50, 10, 10))
     d = ImageDraw.Draw(img)
-    
-    # Funny Sticker
     skull = utils.get_emoji("💀", size=150)
     if skull: img.paste(skull, (W//2 - 75, 50), skull)
-    
-    # Avatar (Crossed Out)
     if avatar:
         av = utils.get_circle_avatar(avatar, size=120)
         if av: 
             img.paste(av, (W//2 - 60, 220), av)
-            # Red Cross
             d.line([W//2-50, 220, W//2+50, 340], fill="red", width=8)
             d.line([W//2+50, 220, W//2-50, 340], fill="red", width=8)
-
     utils.write_text(d, (W//2, 370), "ELIMINATED?", size=40, align="center", col="red", shadow=True)
     utils.write_text(d, (W//2, 430), f"Lives: {lives}", size=25, align="center", col="#FFAA00")
-    
     return img
 
 def draw_setup_board():
     W, H = 500, 500
     img = utils.create_canvas(W, H, (20, 20, 25))
     d = ImageDraw.Draw(img)
-    
-    # Grid Preview
     start_x, start_y = 55, 100
     box_w, box_h = 85, 60
     gap = 15
@@ -202,7 +158,6 @@ def draw_setup_board():
         y = start_y + (row * (box_h + gap))
         d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=5, fill=(40, 50, 60), outline="#555", width=1)
         utils.write_text(d, (x+42, y+30), str(i+1), size=20, align="center", col="#AAA")
-
     utils.write_text(d, (W//2, 40), "🔒 SECRET MISSION", size=35, align="center", col="#FEE75C", shadow=True)
     utils.write_text(d, (W//2, 400), "Select 4 numbers from above", size=22, align="center", col="white")
     utils.write_text(d, (W//2, 440), "Example Reply: 1 5 9 12", size=20, align="center", col="#00FF00")
@@ -268,16 +223,19 @@ def handle_command(bot, command, room_id, user, args, data):
         bot.send_dm_image(g.p2_name, link, msg)
         return True
 
-    # 4. DM SETUP
+    # 4. DM SETUP (FIXED LOGIC)
     if str(uid) in setup_pending:
-        nums = [int(s) for s in command.split() if s.isdigit()]
-        if not nums and args: nums = [int(s) for s in args if s.isdigit()]
+        # Combine command + args and clean it
+        full_text = f"{command} {' '.join(args)}"
+        clean_text = full_text.replace(',', ' ')
+        nums = [int(s) for s in clean_text.split() if s.isdigit()]
         
         if len(nums) == 4 and all(1<=n<=12 for n in nums) and len(set(nums))==4:
             rid = setup_pending[str(uid)]
             with game_lock:
                 if rid in games:
                     g = games[rid]
+                    g.touch()
                     idxs = [n-1 for n in nums]
                     if str(uid) == str(g.p1_id):
                         for i in idxs: g.board_p1[i] = 1
@@ -286,7 +244,8 @@ def handle_command(bot, command, room_id, user, args, data):
                         for i in idxs: g.board_p2[i] = 1
                         g.p2_ready = True
                     
-                    bot.send_dm(user, "Done ✅ selected now go back in room")
+                    # ✅ REQUESTED DM REPLY
+                    bot.send_dm(user, "Your bombs has been placed ✅ now go back and play in room\n⚠️ **DON'T REVEAL THIS**")
                     
                     if g.p1_ready and g.p2_ready:
                         g.state = 'playing'
@@ -297,7 +256,7 @@ def handle_command(bot, command, room_id, user, args, data):
                         bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "Start"})
             return True
         else:
-            bot.send_dm(user, "❌ Invalid! Send 4 unique numbers (1-12).")
+            bot.send_dm(user, "❌ Invalid! Send 4 unique numbers.\nExample: `1 5 9 12`")
             return True
 
     # 5. PLAY
@@ -334,7 +293,6 @@ def handle_command(bot, command, room_id, user, args, data):
 
             winner, win_id, win_av = None, None, None
             loser_id = None
-            
             if g.lives_p1 == 0: 
                 winner=g.p2_name; win_id=g.p2_id; win_av=g.p2_avatar
                 loser_id = g.p1_id
@@ -349,10 +307,10 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "WIN"})
                 bot.send_message(room_id, f"🎉 **{winner} WINS!**")
                 
-                # --- KICK LOSER LOGIC ---
+                # KICK LOSER
                 if loser_id:
-                     bot.send_message(room_id, "👋 **Kicking the loser in 3s...**")
-                     time.sleep(2) # Little delay
+                     bot.send_message(room_id, "👋 Kicking loser in 3s...")
+                     time.sleep(3)
                      bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": str(loser_id)})
 
                 del games[room_id]
