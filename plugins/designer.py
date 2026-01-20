@@ -2,8 +2,9 @@ import sys
 import os
 import textwrap
 import random
-import re
-from PIL import ImageDraw, ImageFont, ImageFilter
+import requests
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # --- IMPORTS ---
 try: import utils
@@ -13,151 +14,316 @@ except ImportError: print("[Designer] Error: utils.py not found!")
 user_drafts = {}
 
 def setup(bot):
-    print("[Designer] 3D Vibe Engine Loaded.")
+    print("[Designer] Ultra-Graphics Engine Loaded.")
 
 # ==========================================
-# 🧠 VIBE ENGINE
+# 🌐 ASSETS MANAGER (More Variety)
+# ==========================================
+
+def get_dicebear_avatar(username, style="notionists"):
+    """
+    Styles: adventurer, fun-emoji, bottts, notionists (Sketch style), lorelei
+    """
+    # Using 'notionists' or 'lorelei' for a more artistic/premium look
+    url = f"https://api.dicebear.com/9.x/{style}/png?seed={username}&backgroundColor=transparent&size=512"
+    return utils.get_image(url)
+
+def get_sticker_by_vibe(vibe):
+    """
+    Returns a random premium sticker based on vibe.
+    """
+    library = {
+        "love": [
+            "https://img.icons8.com/fluency/512/heart-with-arrow.png",
+            "https://img.icons8.com/3d-fluency/512/love-letter.png",
+            "https://img.icons8.com/fluency/512/diamond-heart.png"
+        ],
+        "birthday": [
+            "https://img.icons8.com/fluency/512/birthday-cake.png",
+            "https://img.icons8.com/3d-fluency/512/gift.png",
+            "https://img.icons8.com/fluency/512/party-popper.png"
+        ],
+        "cool": [
+            "https://img.icons8.com/fluency/512/cool.png",
+            "https://img.icons8.com/3d-fluency/512/sunglasses.png",
+            "https://img.icons8.com/fluency/512/dj.png"
+        ],
+        "angry": [
+            "https://img.icons8.com/fluency/512/angry-face.png",
+            "https://img.icons8.com/3d-fluency/512/fire-element.png",
+            "https://img.icons8.com/fluency/512/bomb.png"
+        ],
+        "sad": [
+            "https://img.icons8.com/fluency/512/crying.png",
+            "https://img.icons8.com/3d-fluency/512/rain-cloud.png",
+            "https://img.icons8.com/fluency/512/broken-heart.png"
+        ],
+        "fun": [
+            "https://img.icons8.com/fluency/512/lol.png",
+            "https://img.icons8.com/3d-fluency/512/joker.png",
+            "https://img.icons8.com/fluency/512/confetti.png"
+        ]
+    }
+    options = library.get(vibe, ["https://img.icons8.com/fluency/512/star.png"])
+    return utils.get_image(random.choice(options))
+
+# ==========================================
+# 🧠 VIBE & THEME CONFIG
 # ==========================================
 VIBE_CONFIG = {
-    "love": { "gradient": [(255, 20, 147), (50, 0, 20)], "border": "#FF69B4", "glow": (255, 105, 180, 100), "sticker": "love", "emoji_fallback": "❤️" },
-    "birthday": { "gradient": [(255, 215, 0), (255, 69, 0)], "border": "#FFFF00", "glow": (255, 255, 0, 100), "sticker": "win", "emoji_fallback": "🎂" },
-    "cool": { "gradient": [(0, 0, 0), (0, 191, 255)], "border": "#00FFFF", "glow": (0, 255, 255, 100), "sticker": "cool", "emoji_fallback": "😎" },
-    "sad": { "gradient": [(40, 62, 81), (10, 35, 66)], "border": "#87CEEB", "glow": (135, 206, 235, 80), "sticker": "sad", "emoji_fallback": "😢" },
-    "angry": { "gradient": [(139, 0, 0), (0, 0, 0)], "border": "#FF0000", "glow": (255, 0, 0, 120), "sticker": "fire", "emoji_fallback": "😡" },
-    "fun": { "gradient": [(255, 0, 255), (0, 255, 255)], "border": "#FFFFFF", "glow": (255, 255, 255, 100), "sticker": "laugh", "emoji_fallback": "😂" }
+    "love": { "colors": ["#FF9A9E", "#FECFEF", "#FFD1FF"], "icon": "love" },
+    "birthday": { "colors": ["#F6D365", "#FDA085", "#FFCC33"], "icon": "birthday" },
+    "cool": { "colors": ["#84FAB0", "#8FD3F4", "#00F260"], "icon": "cool" },
+    "angry": { "colors": ["#FF416C", "#FF4B2B", "#800000"], "icon": "angry" },
+    "fun": { "colors": ["#FA709A", "#FEE140", "#96E6A1"], "icon": "fun" },
+    "sad": { "colors": ["#E6E9F0", "#EEF1F5", "#BCC5CE"], "icon": "sad" }
 }
 
 def detect_vibe(text):
-    text = text.lower()
-    if any(x in text for x in ["love", "miss", "jaan", "babu", "❤️", "😘", "😍", "💋"]): return "love"
-    if any(x in text for x in ["hbd", "birthday", "party", "cake", "🎂", "🎈"]): return "birthday"
-    if any(x in text for x in ["sad", "cry", "sorry", "hurt", "😢", "😭", "💔"]): return "sad"
-    if any(x in text for x in ["angry", "hate", "fuck", "bsdk", "😡", "🤬", "fire"]): return "angry"
-    if any(x in text for x in ["lol", "lmao", "haha", "😂", "🤣", "😜"]): return "fun"
+    t = text.lower()
+    if any(x in t for x in ["love", "miss", "kiss", "❤️", "😍"]): return "love"
+    if any(x in t for x in ["hbd", "birthday", "party", "🎂", "🎉"]): return "birthday"
+    if any(x in t for x in ["angry", "hate", "fuck", "😡", "🤬"]): return "angry"
+    if any(x in t for x in ["sad", "sorry", "cry", "😭", "💔"]): return "sad"
+    if any(x in t for x in ["lol", "haha", "joy", "😂", "🤣"]): return "fun"
     return "cool"
 
 # ==========================================
-# 🎨 3D CARD GENERATOR
+# 🎨 GENERATORS (Enhanced)
 # ==========================================
-def draw_3d_card(text, sender_name, vibe_key):
-    W, H = 800, 500
-    config = VIBE_CONFIG[vibe_key]
+
+def create_bokeh_background(W, H, colors):
+    """Creates a premium abstract background with glowing orbs"""
+    # Base Gradient
+    base_col = Image.new("RGB", (W, H), colors[0])
     
-    img = utils.get_gradient(W, H, config["gradient"][0], config["gradient"][1])
+    # Create overlay for orbs
+    overlay = Image.new("RGBA", (W, H), (0,0,0,0))
+    d = ImageDraw.Draw(overlay)
+    
+    # Draw random glowing circles
+    for _ in range(15):
+        x = random.randint(-100, W)
+        y = random.randint(-100, H)
+        size = random.randint(100, 400)
+        col_hex = random.choice(colors)
+        
+        # Draw ellipse with transparency
+        # Pillow doesn't support direct hex with alpha in strings sometimes, so simple fill
+        d.ellipse([x, y, x+size, y+size], fill=col_hex)
+    
+    # Heavy Blur for Bokeh effect
+    overlay = overlay.filter(ImageFilter.GaussianBlur(40))
+    
+    # Composite
+    base_col.paste(overlay, (0,0), overlay)
+    return base_col
+
+def create_square_design(username, text):
+    W, H = 600, 600
+    vibe = detect_vibe(text)
+    cfg = VIBE_CONFIG[vibe]
+    
+    # 1. Advanced Background
+    img = create_bokeh_background(W, H, cfg["colors"])
     d = ImageDraw.Draw(img)
     
-    bg_emoji = utils.get_emoji(config["emoji_fallback"], size=100)
-    if bg_emoji:
-        bg_layer = utils.create_canvas(W, H, (0,0,0,0))
-        for _ in range(6):
-            x, y = random.randint(-50, W), random.randint(-50, H)
-            rotated = bg_emoji.rotate(random.randint(0, 360), expand=True)
-            mask = rotated.split()[3].point(lambda i: i * 0.15)
-            bg_layer.paste(rotated, (x, y), mask)
-        img.paste(bg_layer, (0,0), bg_layer)
+    # 2. Glassmorphism Card
+    m = 50
+    # White Glass with low opacity
+    d.rounded_rectangle([m, m, W-m, H-m], radius=40, fill=(255, 255, 255, 40))
+    # Inner Stroke (Shine)
+    d.rounded_rectangle([m+2, m+2, W-m-2, H-m-2], radius=38, outline=(255, 255, 255, 100), width=2)
+    # Outer Glow/Shadow
+    d.rounded_rectangle([m, m, W-m, H-m], radius=40, outline=(255, 255, 255, 150), width=4)
 
-    card_w, card_h = 600, 300
-    cx, cy = (W - card_w) // 2, (H - card_h) // 2
+    # 3. Avatar (Artistic Style)
+    # Using 'lorelei' for standard or 'adventurer'
+    style = "lorelei" if vibe in ["love", "sad"] else "adventurer"
+    avatar = get_dicebear_avatar(username, style)
     
-    d.rounded_rectangle([cx, cy, cx+card_w, cy+card_h], radius=30, fill=(255, 255, 255, 30))
-    d.rounded_rectangle([cx-2, cy-2, cx+card_w+2, cy+card_h+2], radius=30, outline=config["glow"], width=4)
-    d.rounded_rectangle([cx, cy, cx+card_w, cy+card_h], radius=30, outline=config["border"], width=2)
-    
-    sticker_name = config["sticker"]
-    sticker = utils.get_sticker(sticker_name, size=180)
-    if not sticker: sticker = utils.get_emoji(config["emoji_fallback"], size=180)
-    
-    if sticker: img.paste(sticker, (cx + card_w - 120, cy - 60), sticker)
+    if avatar:
+        avatar = avatar.resize((240, 240))
+        # Drop Shadow for Avatar
+        shadow = Image.new("RGBA", (240, 240), (0,0,0,0))
+        ds = ImageDraw.Draw(shadow)
+        ds.ellipse([20, 210, 220, 235], fill=(0,0,0,60))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(8))
+        img.paste(shadow, (W//2 - 120, 100), shadow)
+        # Paste Avatar
+        img.paste(avatar, (W//2 - 120, 80), avatar)
 
-    wrapper = textwrap.TextWrapper(width=30) 
+    # 4. Text Typography (Pro)
+    wrapper = textwrap.TextWrapper(width=22)
     lines = wrapper.wrap(text)
     
-    font_size = 50
-    if len(text) > 50: font_size = 40
-    if len(text) > 100: font_size = 30
+    # Dynamic Sizing
+    font_size = 45 if len(text) < 40 else 32
+    # Ensure text fits
+    total_text_h = len(lines) * (font_size + 10)
+    start_y = 350
     
-    start_y = cy + 60
-    for line in lines:
-        if start_y > cy + card_h - 60: break
-        utils.write_text(d, (cx + 50 + 3, start_y + 3), line, size=font_size, col=(0,0,0,150))
-        utils.write_text(d, (cx + 50, start_y), line, size=font_size, col="white", shadow=False)
-        start_y += (font_size + 10)
+    # Adjust Y if text is too long
+    if start_y + total_text_h > H - 60:
+        start_y = 330
+        font_size -= 5
 
-    utils.write_text(d, (cx + 30, cy + card_h - 40), f"From: @{sender_name}", size=20, col=config["border"])
-    utils.write_text(d, (cx + card_w - 150, cy + card_h - 40), "✨ 3D Design", size=16, col="#AAA", align="center")
+    for line in lines:
+        # Stroke Effect (Black Outline)
+        # Draw multiple times to create thickness
+        for off in [(-2,-2), (-2,2), (2,-2), (2,2)]:
+            utils.write_text(d, (W//2 + off[0], start_y + off[1]), line, size=font_size, align="center", col="black", shadow=False)
+        
+        # Main Text (White)
+        utils.write_text(d, (W//2, start_y), line, size=font_size, align="center", col="white", shadow=False)
+        start_y += (font_size + 8)
+
+    # 5. Floating Sticker (Randomized)
+    sticker_img = get_sticker_by_vibe(vibe)
+    if sticker_img:
+        sticker = sticker_img.resize((130, 130))
+        # Rotate for fun
+        sticker = sticker.rotate(random.randint(-15, 15), expand=True, resample=Image.BICUBIC)
+        # Paste at top right
+        img.paste(sticker, (W-160, 20), sticker)
+
+    # Footer
+    utils.write_text(d, (W//2, H-40), f"@{username}", size=18, align="center", col=(255,255,255,200))
+    
     return img
 
+def create_sticker_design(username, text):
+    """Transparent Sticker with White Stroke"""
+    W, H = 550, 320
+    img = Image.new("RGBA", (W, H), (0,0,0,0))
+    
+    vibe = detect_vibe(text)
+    cfg = VIBE_CONFIG[vibe]
+    
+    # Layer for content
+    content = Image.new("RGBA", (W, H), (0,0,0,0))
+    d = ImageDraw.Draw(content)
+    
+    # 1. Avatar (Fun Style)
+    avatar = get_dicebear_avatar(username, "fun-emoji")
+    if avatar:
+        avatar = avatar.resize((160, 160))
+        content.paste(avatar, (10, 70), avatar)
+        
+    # 2. Bubble Background
+    # Draw a colorful rounded rect
+    # We use the first color of the vibe palette
+    bubble_col = cfg["colors"][0] 
+    # Convert hex string to RGB tuple if needed, but PIL handles hex strings in fill
+    
+    d.rounded_rectangle([160, 40, 530, 260], radius=30, fill=bubble_col)
+    
+    # 3. Text
+    wrapper = textwrap.TextWrapper(width=18)
+    lines = wrapper.wrap(text)
+    y = 70
+    for line in lines:
+        if y > 240: break
+        utils.write_text(d, (345, y), line, size=30, align="center", col="black")
+        y += 35
+        
+    # 4. Icon Decor
+    icon = get_sticker_by_vibe(vibe)
+    if icon:
+        icon = icon.resize((90, 90))
+        content.paste(icon, (460, 200), icon)
+
+    # 5. Create White Border (Sticker Cutout Effect)
+    # Get alpha channel
+    alpha = content.split()[3]
+    # Expand it
+    border = alpha.filter(ImageFilter.MaxFilter(9))
+    
+    bg = Image.new("RGBA", (W, H), (0,0,0,0))
+    # Draw white silhouette
+    white_layer = Image.new("RGBA", (W, H), (255,255,255,255))
+    bg.paste(white_layer, (0,0), border)
+    
+    # Composite
+    final = Image.alpha_composite(bg, content)
+    
+    # Add Drop Shadow
+    # Create a larger canvas to hold shadow
+    canvas = Image.new("RGBA", (W+20, H+20), (0,0,0,0))
+    
+    # Shadow layer
+    shadow_mask = border.filter(ImageFilter.GaussianBlur(6))
+    shadow_layer = Image.new("RGBA", (W, H), (0,0,0,100))
+    canvas.paste(shadow_layer, (10, 10), shadow_mask)
+    
+    # Paste Main Image
+    canvas.paste(final, (5, 5), final)
+    
+    return canvas
+
 # ==========================================
-# ⚙️ HANDLER (NO CHECKS VERSION)
+# ⚙️ HANDLER
 # ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     user_id = data.get('userid', user)
     
-    # MODE 1: Store
-    if cmd == "design":
+    # 1. CREATE (!create text) - Show in Room
+    if cmd == "create":
         if not args:
-            bot.send_message(room_id, "Usage: `!design <text>`")
+            bot.send_message(room_id, "Usage: `!create Hello World!`")
             return True
-        
+            
         text = " ".join(args)
-        user_drafts[user_id] = text
-        vibe = detect_vibe(text)
-        bot.send_message(room_id, f"🎨 **Saved!** Theme: {vibe.upper()}\nUse `!share @username`")
+        bot.send_message(room_id, "🎨 **Creating Masterpiece...**")
+        
+        img = create_square_design(user, text)
+        link = utils.upload(bot, img)
+        
+        if link:
+            user_drafts[user_id] = link # Save for sharing
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Design"})
+            bot.send_message(room_id, f"✨ Ready! Type `!share @username` to send.")
+        else:
+            bot.send_message(room_id, "❌ Error.")
         return True
 
-    # MODE 1: Share (Removed ID Checks)
+    # 2. SHARE (!share @user)
     if cmd == "share":
         if user_id not in user_drafts:
-            bot.send_message(room_id, "⚠️ No draft. Use `!design` first.")
+            bot.send_message(room_id, "⚠️ Create a design first!")
             return True
         if not args:
             bot.send_message(room_id, "Usage: `!share @username`")
             return True
             
-        target_name = args[0].replace("@", "")
-        text = user_drafts[user_id]
-        vibe = detect_vibe(text)
+        target = args[0].replace("@", "")
+        link = user_drafts[user_id]
         
-        bot.send_message(room_id, "🎨 **Sending...**")
-        
-        # --- NO ID LOOKUP: DIRECT SEND ---
-        img = draw_3d_card(text, user, vibe)
-        link = utils.upload(bot, img)
-        
-        if link:
-            # Seedha Username use kar rahe hain
-            bot.send_dm_image(target_name, link, f"📨 **Card from @{user}**")
-            bot.send_message(room_id, f"✅ Sent to @{target_name}")
-            del user_drafts[user_id]
-        else:
-            bot.send_message(room_id, "❌ Upload Failed.")
+        bot.send_dm_image(target, link, f"📨 **Special Card from @{user}**")
+        bot.send_message(room_id, f"✅ Sent to @{target}")
         return True
 
-    # MODE 2: Instant PMS (Removed ID Checks)
+    # 3. PMS (!pms @user text) - Instant Sticker
     if cmd == "pms":
         if len(args) < 2:
-            bot.send_message(room_id, "Usage: `!pms @username Message...`")
+            bot.send_message(room_id, "Usage: `!pms @user Message...`")
             return True
             
-        target_name = args[0].replace("@", "")
+        target = args[0].replace("@", "")
         text = " ".join(args[1:])
         
-        vibe = detect_vibe(text)
-        bot.send_message(room_id, f"🎨 Sending **{vibe.upper()}** card...")
+        bot.send_message(room_id, f"🎨 Sending Sticker to @{target}...")
         
-        # --- NO ID LOOKUP: DIRECT SEND ---
-        img = draw_3d_card(text, user, vibe)
+        img = create_sticker_design(user, text)
         link = utils.upload(bot, img)
         
         if link:
-            # Seedha Username use kar rahe hain
-            bot.send_dm_image(target_name, link, f"📨 **You got a Card!**")
+            bot.send_dm_image(target, link, "You got a Sticker! ⭐")
             bot.send_message(room_id, "✅ **Delivered!**")
         else:
-            bot.send_message(room_id, "❌ Error uploading.")
-            
+            bot.send_message(room_id, "❌ Error.")
         return True
 
     return False
