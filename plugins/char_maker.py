@@ -4,330 +4,264 @@ import random
 import requests
 import textwrap
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 
 # --- IMPORTS ---
 try: import utils
 except ImportError: print("[CharPro] Error: utils.py not found!")
 
 # --- STATE ---
-# Drafts save karne ke liye taaki share kar sakein
 char_drafts = {}
 
 def setup(bot):
-    print("[CharPro] God-Mode Graphic Engine Loaded.")
+    print("[CharPro] Infinite Generation Engine Loaded.")
 
 # ==========================================
-# 🧠 ASSET INTELLIGENCE (The Source)
+# 🧠 INTELLIGENT ASSET FETCHING (Multi-Source)
 # ==========================================
 
-class AssetEngine:
-    """
-    Yeh class alag-alag API se best character dhund kar lati hai.
-    Supports: Robots, Humans, Anime, Sketch, Monsters, Aliens.
-    """
+class AssetFactory:
     @staticmethod
-    def get_avatar_url(seed, tags):
-        tags = tags.lower()
+    def get_smart_image(prompt, username):
+        """
+        Prompt ko samajh kar sahi API se image lata hai.
+        Har baar naya seed use karta hai taaki image repeat na ho.
+        """
+        prompt = prompt.lower()
         
-        # 1. 🤖 ROBOTS / SCI-FI
-        if any(x in tags for x in ["robot", "mech", "bot", "android", "future"]):
-            if "old" in tags: return f"https://robohash.org/{seed}.png?set=set1&size=500x500" # Classic Robot
-            return f"https://api.dicebear.com/9.x/bottts/png?seed={seed}&size=1024" # Modern Bot
+        # RANDOM SEED GENERATOR (Ye loop problem fix karega)
+        # Hum username + prompt + random number mila kar seed banayenge
+        seed = f"{username}_{prompt}_{random.randint(1, 999999)}"
+        
+        # SOURCE 1: SUPERHEROES & WARRIORS (Detailed Humans)
+        if any(x in prompt for x in ["hero", "super", "wonder", "man", "woman", "spider", "bat", "iron", "captain"]):
+            # DiceBear 'Lorelei' ya 'Adventurer' best hai humans ke liye
+            style = "lorelei" if any(x in prompt for x in ["woman", "girl", "wonder", "widow"]) else "adventurer"
+            return f"https://api.dicebear.com/9.x/{style}/png?seed={seed}&backgroundColor=transparent&size=1024"
 
-        # 2. 👹 MONSTERS / ALIENS
-        if any(x in tags for x in ["monster", "alien", "ghost", "zombie", "demon", "scary"]):
-            if "alien" in tags: return f"https://robohash.org/{seed}.png?set=set2&size=500x500" # Alien
-            if "head" in tags: return f"https://robohash.org/{seed}.png?set=set3&size=500x500" # Robot Head
-            return f"https://api.dicebear.com/9.x/thumbs/png?seed={seed}&size=1024" # Weird Shape
+        # SOURCE 2: MONSTERS & VILLAINS (RoboHash Set 2)
+        elif any(x in prompt for x in ["monster", "hulk", "zombie", "alien", "thanos", "villain", "ghost"]):
+            # RoboHash Set 2 is Monsters
+            return f"https://robohash.org/{seed}.png?set=set2&size=600x600"
 
-        # 3. 👩 WOMAN / GIRL
-        if any(x in tags for x in ["girl", "woman", "lady", "queen", "princess", "she"]):
-            style = random.choice(["lorelei", "personalities", "micah"])
-            return f"https://api.dicebear.com/9.x/{style}/png?seed={seed}&size=1024"
+        # SOURCE 3: ROBOTS & CYBORGS (RoboHash Set 1 / DiceBear Bottts)
+        elif any(x in prompt for x in ["robot", "cyborg", "mech", "android", "tech", "ai"]):
+            # Mix of sources for variety
+            if random.random() > 0.5:
+                return f"https://robohash.org/{seed}.png?set=set1&size=600x600"
+            else:
+                return f"https://api.dicebear.com/9.x/bottts-neutral/png?seed={seed}&size=1024"
 
-        # 4. 👨 MAN / BOY
-        if any(x in tags for x in ["boy", "man", "king", "guy", "he", "hero"]):
-            style = random.choice(["adventurer", "avataaars", "micah"])
-            return f"https://api.dicebear.com/9.x/{style}/png?seed={seed}&size=1024"
+        # SOURCE 4: CATS & CUTE ANIMALS (RoboHash Set 4)
+        elif any(x in prompt for x in ["cat", "kitty", "cute", "animal", "pet"]):
+            return f"https://robohash.org/{seed}.png?set=set4&size=600x600"
 
-        # 5. ✏️ ART / SKETCH
-        if any(x in tags for x in ["art", "sketch", "draw", "paint", "paper"]):
+        # SOURCE 5: ART & SKETCH (Notion Style)
+        elif any(x in prompt for x in ["art", "sketch", "draw", "paint", "paper"]):
             return f"https://api.dicebear.com/9.x/notionists/png?seed={seed}&size=1024"
 
-        # 6. 😺 CUTE / ANIME
-        if any(x in tags for x in ["cute", "cat", "animal", "kawaii", "chibi"]):
-            return f"https://api.dicebear.com/9.x/fun-emoji/png?seed={seed}&size=1024"
-
-        # 7. 👾 RETRO / PIXEL
-        if any(x in tags for x in ["pixel", "retro", "game", "8bit"]):
-            return f"https://api.dicebear.com/9.x/pixel-art/png?seed={seed}&size=1024"
-
-        # DEFAULT RANDOMIZER (Agar kuch match na ho to surprise do)
-        styles = ["adventurer", "avataaars", "bottts", "fun-emoji", "lorelei", "notionists", "open-peeps"]
-        return f"https://api.dicebear.com/9.x/{random.choice(styles)}/png?seed={seed}&size=1024"
+        # SOURCE 6: 3D AVATARS (Default)
+        # Agar kuch samajh na aaye to 3D Fun Emoji ya Avataaars use karo
+        styles = ["fun-emoji", "avataaars", "big-smile", "open-peeps"]
+        chosen = random.choice(styles)
+        return f"https://api.dicebear.com/9.x/{chosen}/png?seed={seed}&size=1024"
 
 # ==========================================
-# 🖌️ PILLOW FX ENGINE (Visual Magic)
+# 🎨 BACKGROUND & FX ENGINE
 # ==========================================
 
-class FX:
-    """Special Effects for Images"""
+def create_ultra_bg(W, H, prompt):
+    """
+    Prompt ke mood ke hisaab se background generate karta hai.
+    """
+    prompt = prompt.lower()
     
-    @staticmethod
-    def apply_glitch(img, offset=10):
-        """RGB Channel Split Glitch"""
-        r, g, b, a = img.split()
-        r = ImageOps.colorize(r.convert("L"), (0,0,0), (255,0,0)).convert("RGBA")
-        b = ImageOps.colorize(b.convert("L"), (0,0,0), (0,255,255)).convert("RGBA")
-        
-        # Shift channels
-        final = Image.new("RGBA", img.size)
-        final.paste(r, (offset, 0), r)
-        final.paste(b, (-offset, 0), b)
-        
-        # Blend original alpha
-        final.putalpha(a)
-        return final
+    # 1. THEME SELECTION
+    if any(x in prompt for x in ["fire", "anger", "hot", "devil", "red"]):
+        colors = ["#8B0000", "#FF4500", "#000000"] # Magma
+    elif any(x in prompt for x in ["ice", "cool", "water", "blue", "sky"]):
+        colors = ["#00BFFF", "#1E90FF", "#F0F8FF"] # Ice
+    elif any(x in prompt for x in ["joker", "toxic", "poison", "green", "hulk"]):
+        colors = ["#00FF00", "#4B0082", "#2F4F4F"] # Toxic
+    elif any(x in prompt for x in ["girl", "love", "pink", "cute", "wonder"]):
+        colors = ["#FF69B4", "#FF1493", "#FFD700"] # Barbie/Wonder
+    else:
+        # Random Neon
+        colors = [random.choice(["#FF00FF", "#00FFFF", "#FFFF00"]), "#111111", "#222233"]
 
-    @staticmethod
-    def add_cinematic_lighting(img, color_hex):
-        """Adds a gradient overlay"""
-        overlay = Image.new("RGBA", img.size, (0,0,0,0))
-        d = ImageDraw.Draw(overlay)
-        W, H = img.size
-        # Vignette
-        for i in range(100):
-            alpha = int(255 * (i/100))
-            margin = i * 2
-            d.rectangle([0,0,W,H], outline=(0,0,0,alpha), width=1)
+    # 2. BASE GRADIENT
+    img = Image.new("RGBA", (W, H), colors[1])
+    d = ImageDraw.Draw(img)
+    
+    # 3. PROCEDURAL PARTICLES (Chinte)
+    for _ in range(30):
+        x = random.randint(-100, W)
+        y = random.randint(-100, H)
+        s = random.randint(20, 400)
+        col = random.choice([colors[0], colors[2]])
         
-        # Color Tint
-        tint = Image.new("RGBA", img.size, color_hex)
-        tint.putalpha(50)
+        # Transparent Shape
+        shape = Image.new("RGBA", (W, H), (0,0,0,0))
+        sd = ImageDraw.Draw(shape)
         
-        img = Image.alpha_composite(img, tint)
-        return img
+        if random.random() > 0.5:
+            sd.ellipse([x, y, x+s, y+s], fill=col)
+        else:
+            # Draw Splatter Lines
+            sd.line([x, y, x+random.randint(-100,100), y+random.randint(-100,100)], fill=col, width=random.randint(5, 20))
+            
+        # Heavy Blur for "Glow" effect
+        shape = shape.filter(ImageFilter.GaussianBlur(random.randint(10, 50)))
+        img.paste(shape, (0,0), shape)
 
-    @staticmethod
-    def create_dynamic_bg(W, H, theme="dark"):
-        if theme == "neon":
-            colors = ["#FF00FF", "#00FFFF", "#FFFF00", "#FF4500"]
-            base = (10, 5, 20)
-        elif theme == "gold":
-            colors = ["#FFD700", "#FFA500", "#FFFFFF"]
-            base = (30, 20, 5)
-        elif theme == "blood":
-            colors = ["#800000", "#FF0000", "#000000"]
-            base = (10, 0, 0)
-        else: # Random
-            colors = ["#1E90FF", "#00FA9A", "#FF69B4"]
-            base = (20, 20, 25)
+    # 4. OVERLAY TEXTURE (Noise)
+    noise = Image.effect_noise((W, H), 5).convert("L")
+    noise = ImageOps.colorize(noise, black="black", white="white").convert("RGBA")
+    noise.putalpha(20) # 20% opacity
+    img.paste(noise, (0,0), noise)
+    
+    return img
 
-        img = Image.new("RGBA", (W, H), base)
-        d = ImageDraw.Draw(img)
-        
-        # Random Splatters
-        for _ in range(30):
-            x = random.randint(-100, W)
-            y = random.randint(-100, H)
-            s = random.randint(50, 400)
-            col = random.choice(colors)
-            
-            layer = Image.new("RGBA", (W, H), (0,0,0,0))
-            ld = ImageDraw.Draw(layer)
-            
-            type = random.choice(["circle", "rect", "line"])
-            if type == "circle": ld.ellipse([x, y, x+s, y+s], fill=col)
-            elif type == "rect": ld.rectangle([x, y, x+s, y+s/2], fill=col)
-            else: ld.line([x, y, x+s, y+s], fill=col, width=10)
-            
-            # Blur & Paste
-            layer = layer.filter(ImageFilter.GaussianBlur(random.randint(20, 60)))
-            # Random Opacity
-            r,g,b,a = layer.split()
-            a = a.point(lambda i: i * 0.3)
-            layer.putalpha(a)
-            
-            img.paste(layer, (0,0), layer)
-            
-        return img
+def apply_cinematic_effects(img):
+    """
+    Image ko 3D pop aur Contrast deta hai.
+    """
+    # 1. Enhance Color
+    enhancer = ImageEnhance.Color(img)
+    img = enhancer.enhance(1.3)
+    
+    # 2. Enhance Sharpness
+    enhancer = ImageEnhance.Sharpness(img)
+    img = enhancer.enhance(1.2)
+    
+    # 3. Vignette (Dark Corners)
+    W, H = img.size
+    overlay = Image.new("RGBA", (W, H), (0,0,0,0))
+    d = ImageDraw.Draw(overlay)
+    
+    # Draw transparent radial gradient manually
+    # Simple workaround: Draw thick borders with blur
+    d.rectangle([0,0,W,H], outline="black", width=20)
+    overlay = overlay.filter(ImageFilter.GaussianBlur(50))
+    img.paste(overlay, (0,0), overlay)
+    
+    return img
 
 # ==========================================
-# 🖼️ GENERATORS (The 4 Command Modes)
+# 🖼️ MASTER CARD BUILDER
 # ==========================================
 
-# 1. STANDARD CARD (!char)
-def gen_standard_card(username, desc):
+def draw_character_card(username, prompt):
     W, H = 600, 800
-    img = FX.create_dynamic_bg(W, H)
+    
+    # 1. Generate Dynamic Background
+    img = create_ultra_bg(W, H, prompt)
     d = ImageDraw.Draw(img)
     
-    # Avatar
-    url = AssetEngine.get_avatar_url(username, desc)
-    av = utils.get_image(url)
-    if av:
-        av = av.resize((550, 550))
-        # Shadow
-        sh = Image.new("RGBA", (550,550), (0,0,0,0))
-        ImageDraw.Draw(sh).ellipse([50,450,500,500], fill=(0,0,0,100))
-        sh = sh.filter(ImageFilter.GaussianBlur(20))
-        img.paste(sh, (25,120), sh)
-        img.paste(av, (25, 100), av)
+    # 2. Border Frame (Neon Style)
+    m = 25
+    border_col = "white"
+    if "gold" in prompt or "king" in prompt: border_col = "#FFD700"
+    elif "evil" in prompt or "red" in prompt: border_col = "#FF0000"
+    
+    d.rectangle([m, m, W-m, H-m], outline=border_col, width=3)
+    # Corner Brackets
+    L = 50
+    d.line([m, m, m+L, m], fill=border_col, width=8)
+    d.line([m, m, m, m+L], fill=border_col, width=8)
+    d.line([W-m, H-m, W-m-L, H-m], fill=border_col, width=8)
+    d.line([W-m, H-m, W-m, H-m-L], fill=border_col, width=8)
 
-    # Frame
-    d.rectangle([20,20,W-20,H-20], outline="white", width=3)
+    # 3. Fetch & Process Avatar
+    url = AssetFactory.get_smart_image(prompt, username)
+    avatar = utils.get_image(url)
     
-    # Text Plate
-    d.polygon([(0,650), (W,600), (W,H), (0,H)], fill=(0,0,0,220))
-    utils.write_text(d, (W//2, 680), username.upper(), size=50, align="center", col="#00FFFF", shadow=True)
-    utils.write_text(d, (W//2, 740), desc.upper()[:30], size=20, align="center", col="#FFD700")
-    
-    return img
-
-# 2. WANTED POSTER (!wanted)
-def gen_wanted_poster(username, reward):
-    W, H = 600, 800
-    # Sepia Paper Texture
-    img = Image.new("RGB", (W, H), (210, 180, 140))
-    d = ImageDraw.Draw(img)
-    
-    # Grunge noise
-    noise = Image.effect_noise((W, H), 20).convert("L")
-    img.paste(noise, (0,0), noise.point(lambda i: i*0.1))
-    
-    utils.write_text(d, (W//2, 80), "WANTED", size=90, align="center", col="#3E2723", shadow=False)
-    utils.write_text(d, (W//2, 160), "DEAD OR ALIVE", size=30, align="center", col="#3E2723")
-    
-    # Avatar in Box
-    d.rectangle([75, 200, 525, 600], outline="#3E2723", width=5)
-    url = AssetEngine.get_avatar_url(username, "western") # Use generic or adventurous
-    av = utils.get_image(url)
-    if av:
-        av = av.resize((440, 390))
-        av = av.convert("L").convert("RGBA") # Black and white
-        av = ImageOps.colorize(av.convert("L"), (50,30,10), (210,180,140)).convert("RGBA") # Sepia Tint
-        img.paste(av, (80, 205), av)
-
-    utils.write_text(d, (W//2, 650), username.upper(), size=50, align="center", col="#3E2723")
-    utils.write_text(d, (W//2, 720), f"REWARD: ${reward}", size=40, align="center", col="#8B0000")
-    
-    return img
-
-# 3. RPG CARD (!card)
-def gen_rpg_card(username, role):
-    W, H = 500, 700
-    img = FX.create_dynamic_bg(W, H, "gold")
-    d = ImageDraw.Draw(img)
-    
-    # Avatar
-    url = AssetEngine.get_avatar_url(username, role)
-    av = utils.get_image(url)
-    if av:
-        av = av.resize((400, 400))
-        img.paste(av, (50, 100), av)
+    if avatar:
+        avatar = avatar.resize((550, 550))
         
-    # Stats Box
-    d.rounded_rectangle([20, 500, 480, 680], radius=20, fill=(0,0,0,180), outline="gold", width=3)
-    
-    # Random Stats
-    atk = random.randint(50, 99)
-    defs = random.randint(40, 90)
-    spd = random.randint(60, 100)
-    
-    utils.write_text(d, (W//2, 530), f"Class: {role.upper()}", size=30, align="center", col="gold")
-    utils.write_text(d, (100, 600), f"⚔️ ATK: {atk}", size=24, align="left", col="#FF5555")
-    utils.write_text(d, (300, 600), f"🛡️ DEF: {defs}", size=24, align="left", col="#5555FF")
-    utils.write_text(d, (200, 640), f"⚡ SPD: {spd}", size=24, align="center", col="#55FF55")
-    
-    return img
+        # Back Glow (Shadow behind character)
+        glow = Image.new("RGBA", (W, H), (0,0,0,0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse([50, 100, 550, 600], fill=(0,0,0, 100))
+        glow = glow.filter(ImageFilter.GaussianBlur(40))
+        img.paste(glow, (0,0), glow)
+        
+        # Place Main Character
+        img.paste(avatar, (25, 80), avatar)
 
-# 4. GLITCH MODE (!glitch)
-def gen_glitch_art(username):
-    W, H = 500, 500
-    img = Image.new("RGBA", (W, H), (10, 10, 10))
+    # 4. Typography (Poster Style)
+    # Slant Bar for Name
+    d.polygon([(0, 620), (W, 580), (W, H), (0, H)], fill=(10, 10, 10, 230))
+    d.line([(0, 620), (W, 580)], fill=border_col, width=3)
     
-    # Matrix Text Effect
-    d = ImageDraw.Draw(img)
-    for _ in range(50):
-        x, y = random.randint(0, W), random.randint(0, H)
-        utils.write_text(d, (x, y), str(random.randint(0, 1)), size=20, col="#00FF00")
-        
-    url = AssetEngine.get_avatar_url(username, "bot")
-    av = utils.get_image(url)
-    if av:
-        av = av.resize((400, 400))
-        av = FX.apply_glitch(av, offset=15) # Apply Glitch FX
-        img.paste(av, (50, 50), av)
-        
-    utils.write_text(d, (W//2, 450), "SYSTEM FAILURE", size=40, align="center", col="red", shadow=True)
+    # Name
+    utils.write_text(d, (W//2, 650), username.upper(), size=55, align="center", col="white", shadow=True)
+    
+    # Subtitle / Role
+    roles = prompt.split()[:4]
+    role_text = " • ".join([r.upper() for r in roles])
+    utils.write_text(d, (W//2, 710), f"✨ {role_text} ✨", size=22, align="center", col=border_col)
+    
+    # 5. Final Polish
+    img = apply_cinematic_effects(img)
+    
     return img
 
 # ==========================================
-# ⚙️ HANDLER (4 Modes)
+# ⚙️ HANDLER
 # ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     user_id = data.get('userid', user)
     
-    target = user
-    desc = "Hero"
-    if args: 
-        target = args[0].replace("@", "")
-        if len(args) > 1: desc = " ".join(args[1:])
-
-    # 1. STANDARD (!char)
+    # 1. CREATE CHARACTER
     if cmd == "char":
-        bot.send_message(room_id, f"🎨 **Painting:** {target} ({desc})...")
-        img = gen_standard_card(target, desc)
-        link = utils.upload(bot, img)
-        if link:
-            char_drafts[user_id] = link
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Char"})
-            bot.send_message(room_id, "✨ Type `!share @user` to gift.")
+        if len(args) < 1:
+            bot.send_message(room_id, "⚠️ **Usage:** `!char <prompt>`\nExample: `!char wonder woman warrior`")
+            return True
+            
+        # Agar user kisi aur ka char banana chahta hai (!char @user prompt)
+        if args[0].startswith("@"):
+            target_name = args[0].replace("@", "")
+            prompt = " ".join(args[1:])
+        else:
+            target_name = user
+            prompt = " ".join(args)
+            
+        if not prompt: prompt = "Legendary Hero"
+        
+        bot.send_message(room_id, f"🎨 **Generating:** {prompt}...")
+        
+        try:
+            # Generate
+            img = draw_character_card(target_name, prompt)
+            link = utils.upload(bot, img)
+            
+            if link:
+                char_drafts[user_id] = link
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Character"})
+                bot.send_message(room_id, "🔥 **Done!** Type `!share @username` to gift this.")
+            else:
+                bot.send_message(room_id, "❌ Error: Upload failed.")
+        except Exception as e:
+            print(f"Char Error: {e}")
+            bot.send_message(room_id, "⚠️ Art Engine Error.")
+            
         return True
 
-    # 2. WANTED POSTER (!wanted)
-    if cmd == "wanted":
-        bounty = random.randint(1000, 999999)
-        bot.send_message(room_id, f"🤠 **Printing Poster:** {target}...")
-        img = gen_wanted_poster(target, f"{bounty:,}")
-        link = utils.upload(bot, img)
-        if link:
-            char_drafts[user_id] = link
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Wanted"})
-        return True
-
-    # 3. RPG CARD (!card)
-    if cmd == "card":
-        role = desc if args and len(args)>1 else "Warrior"
-        bot.send_message(room_id, f"🃏 **Forging Card:** {target} ({role})...")
-        img = gen_rpg_card(target, role)
-        link = utils.upload(bot, img)
-        if link:
-            char_drafts[user_id] = link
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "RPG"})
-        return True
-
-    # 4. GLITCH (!glitch)
-    if cmd == "glitch":
-        bot.send_message(room_id, f"👾 **Hacking System:** {target}...")
-        img = gen_glitch_art(target)
-        link = utils.upload(bot, img)
-        if link:
-            char_drafts[user_id] = link
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Glitch"})
-        return True
-
-    # 5. SHARE (!share)
+    # 2. SHARE
     if cmd == "share":
         if user_id in char_drafts:
-            if not args: return False
-            to_user = args[0].replace("@", "")
+            if not args:
+                bot.send_message(room_id, "Usage: `!share @username`")
+                return True
+                
+            target = args[0].replace("@", "")
             link = char_drafts[user_id]
-            bot.send_dm_image(to_user, link, f"🎁 **Special Gift from @{user}!**")
-            bot.send_message(room_id, f"✅ Sent to @{to_user}!")
+            
+            bot.send_dm_image(target, link, f"🦸‍♂️ **You have been summoned!**\nCharacter by @{user}")
+            bot.send_message(room_id, f"✅ Character sent to @{target}")
             return True
         return False
 
