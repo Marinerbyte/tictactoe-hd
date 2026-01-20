@@ -17,16 +17,6 @@ class HowdiesBot:
         self.user_id = None; self.active_rooms = []; self.logs = []
         self.running = False; self.start_time = time.time()
         
-        # --- DATA STRUCTURE ---
-        # room_details ab aisa dikhega:
-        # { 
-        #   'RoomName': {
-        #       'id': '...', 
-        #       'users': ['name1', 'name2'],  <-- UI ke liye
-        #       'id_map': {'name1': 'id1', 'name2': 'id2'}, <-- ADMIN ke liye (CRITICAL)
-        #       'chat_log': []
-        #    }
-        # }
         self.room_details = {}
         self.room_id_to_name_map = {}
         
@@ -77,9 +67,19 @@ class HowdiesBot:
             data = json.loads(message)
             handler = data.get("handler")
             
-            # --- DEBUG LOG (Admin issue pakadne ke liye) ---
-            if handler in ["userslist", "activeoccupants"]:
-                print(f"[DEBUG] List Received: {len(data.get('users', []))} users")
+            # ======================================================
+            # 🛠️ FIX: UNIVERSAL USERNAME EXTRACTOR (Jad se ilaaj)
+            # ======================================================
+            # API chahe 'username' bheje, 'from' bheje ya 'sender'
+            # Hum usse standardize karke 'username' aur 'userid' me dal denge
+            
+            extracted_user = data.get("username") or data.get("from") or data.get("sender") or data.get("to")
+            extracted_uid = data.get("userid") or data.get("id") or data.get("user_id") or data.get("from_id")
+
+            # Force inject standardized keys
+            if extracted_user: data["username"] = extracted_user
+            if extracted_uid: data["userid"] = str(extracted_uid)
+            # ======================================================
 
             # --- SYSTEM MESSAGE PASS ---
             if hasattr(self.plugins, 'process_system_message'):
@@ -102,7 +102,7 @@ class HowdiesBot:
                     self.room_details[room_name] = {
                         'id': room_id, 
                         'users': [], 
-                        'id_map': {}, # <-- ID STORE HOGA YAHAN
+                        'id_map': {}, 
                         'chat_log': []
                     }
                     if room_name not in self.active_rooms: self.active_rooms.append(room_name)
@@ -117,16 +117,18 @@ class HowdiesBot:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
                 self.plugins.process_message(data)
 
-# 2. Handle Private Messages (DMs)
+            # 2. Handle Private Messages (DMs) - AB FIX HO GAYA HAI
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
+                # Debugging ke liye print
+                # print(f"[DM FIX] User: {data.get('username')} | Text: {data.get('text')}")
                 self.plugins.process_message(data)            
 
-            # 2. Join Success -> Ask for List
+            # 3. Join Success -> Ask for List
             elif handler == "joinchatroom":
                 self.log(f"Joined {room_name}")
                 if room_id: self.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
             
-            # 3. Handling User Lists (CRITICAL FIX)
+            # 4. Handling User Lists (CRITICAL FIX)
             elif handler in ["activeoccupants", "userslist"] and room_name:
                 raw_users = data.get("users", [])
                 new_users = []
@@ -134,17 +136,17 @@ class HowdiesBot:
                 
                 for u in raw_users:
                     uname = u.get('username')
-                    uid = str(u.get('userid') or u.get('id')) # Dono check karo
+                    uid = str(u.get('userid') or u.get('id'))
                     if uname and uid:
                         new_users.append(uname)
-                        new_map[uname.lower()] = uid # Lowercase for easy search
+                        new_map[uname.lower()] = uid
                 
                 with self.lock:
                     self.room_details[room_name]['users'] = new_users
-                    self.room_details[room_name]['id_map'] = new_map # IDs Saved!
+                    self.room_details[room_name]['id_map'] = new_map
                 self.log(f"Updated list for {room_name}: {len(new_users)} users mapped.")
 
-            # 4. Single User Join (Update Map)
+            # 5. Single User Join (Update Map)
             elif handler == "userjoin" and room_name:
                 u = data.get("username")
                 uid = str(data.get("userid") or data.get("id"))
@@ -154,7 +156,7 @@ class HowdiesBot:
                     if uid:
                         self.room_details[room_name]['id_map'][u.lower()] = uid
 
-            # 5. Single User Leave
+            # 6. Single User Leave
             elif handler == "userleave" and room_name:
                 u = data.get("username")
                 with self.lock:
@@ -177,14 +179,13 @@ class HowdiesBot:
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
 
-# ==========================================
-    # ---  NEW DM & UPLOAD FUNCTIONS  ---
+    # ==========================================
+    # ---  DM & UPLOAD FUNCTIONS  ---
     # ==========================================
 
     def upload_to_server(self, image_bytes, file_type='png'):
         import io
         try:
-            # Agar image PIL format me hai to bytes me convert karo
             if not isinstance(image_bytes, (bytes, bytearray)):
                 img_byte_arr = io.BytesIO()
                 image_bytes.save(img_byte_arr, format=file_type.upper())
@@ -193,7 +194,6 @@ class HowdiesBot:
             url = "https://api.howdies.app/api/upload"
             mime = 'image/gif' if file_type.lower() == 'gif' else 'image/png'
             
-            # API Requirements
             files = {'file': (f'upload.{file_type}', image_bytes, mime)}
             data = {
                 'token': self.token, 
