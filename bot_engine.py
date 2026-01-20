@@ -68,27 +68,41 @@ class HowdiesBot:
             handler = data.get("handler")
             
             # ======================================================
-            # 🛠️ FIX: UNIVERSAL USERNAME EXTRACTOR (Jad se ilaaj)
+            # 🛠️ FIX: UNIVERSAL EXTRACTOR (Enhanced)
             # ======================================================
-            # API chahe 'username' bheje, 'from' bheje ya 'sender'
-            # Hum usse standardize karke 'username' aur 'userid' me dal denge
+            # 1. Username Hunting
+            extracted_user = (
+                data.get("username") or 
+                data.get("from") or 
+                data.get("sender") or 
+                data.get("to") or 
+                data.get("author") or
+                data.get("nick")
+            )
             
-            extracted_user = data.get("username") or data.get("from") or data.get("sender") or data.get("to")
-            extracted_uid = data.get("userid") or data.get("id") or data.get("user_id") or data.get("from_id")
+            # 2. UserID Hunting (Ab CamelCase 'userId' bhi check karega)
+            extracted_uid = (
+                data.get("userid") or 
+                data.get("userId") or  # <-- Added CamelCase
+                data.get("id") or 
+                data.get("user_id") or 
+                data.get("from_id") or
+                data.get("fromId")     # <-- Added CamelCase
+            )
 
-            # Force inject standardized keys
+            # 3. Force Inject
             if extracted_user: data["username"] = extracted_user
             if extracted_uid: data["userid"] = str(extracted_uid)
             # ======================================================
 
-            # --- SYSTEM MESSAGE PASS ---
+            # System Message Pass
             if hasattr(self.plugins, 'process_system_message'):
                 self.plugins.process_system_message(data)
 
             room_name = None
             room_id = str(data.get("roomid"))
             
-            # Smart Room Name Resolution
+            # Room Name Resolution
             if room_id in self.room_id_to_name_map:
                 room_name = self.room_id_to_name_map[room_id]
             elif data.get("name"):
@@ -96,7 +110,7 @@ class HowdiesBot:
             elif room_id in self.room_details:
                  room_name = room_id
 
-            # --- AUTO-CREATE ROOM DATA ---
+            # Auto-Create Room Data
             if room_name and room_name not in self.room_details:
                 with self.lock:
                     self.room_details[room_name] = {
@@ -117,46 +131,48 @@ class HowdiesBot:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
                 self.plugins.process_message(data)
 
-            # 2. Handle Private Messages (DMs) - AB FIX HO GAYA HAI
+            # 2. Handle Private Messages (DMs) - DEBUG ADDED
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
-                # Debugging ke liye print
-                # print(f"[DM FIX] User: {data.get('username')} | Text: {data.get('text')}")
+                # 👇 DEBUG PRINT (Console me dekhein DM aate hi)
+                print(f"\n[DEBUG DM] RAW DATA: {data}\n")
+                
+                if not data.get("username"):
+                    print("[ERROR] Username abhi bhi None hai!")
+                
                 self.plugins.process_message(data)            
 
-            # 3. Join Success -> Ask for List
+            # 3. Join Success
             elif handler == "joinchatroom":
                 self.log(f"Joined {room_name}")
                 if room_id: self.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
             
-            # 4. Handling User Lists (CRITICAL FIX)
+            # 4. User Lists
             elif handler in ["activeoccupants", "userslist"] and room_name:
                 raw_users = data.get("users", [])
                 new_users = []
                 new_map = {}
-                
                 for u in raw_users:
                     uname = u.get('username')
-                    uid = str(u.get('userid') or u.get('id'))
+                    uid = str(u.get('userid') or u.get('id') or u.get('userId'))
                     if uname and uid:
                         new_users.append(uname)
                         new_map[uname.lower()] = uid
-                
                 with self.lock:
                     self.room_details[room_name]['users'] = new_users
                     self.room_details[room_name]['id_map'] = new_map
                 self.log(f"Updated list for {room_name}: {len(new_users)} users mapped.")
 
-            # 5. Single User Join (Update Map)
+            # 5. User Join
             elif handler == "userjoin" and room_name:
                 u = data.get("username")
-                uid = str(data.get("userid") or data.get("id"))
+                uid = str(data.get("userid") or data.get("id") or data.get("userId"))
                 with self.lock:
                     if u not in self.room_details[room_name]['users']:
                         self.room_details[room_name]['users'].append(u)
                     if uid:
                         self.room_details[room_name]['id_map'][u.lower()] = uid
 
-            # 6. Single User Leave
+            # 6. User Leave
             elif handler == "userleave" and room_name:
                 u = data.get("username")
                 with self.lock:
@@ -179,10 +195,6 @@ class HowdiesBot:
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
 
-    # ==========================================
-    # ---  DM & UPLOAD FUNCTIONS  ---
-    # ==========================================
-
     def upload_to_server(self, image_bytes, file_type='png'):
         import io
         try:
@@ -193,50 +205,23 @@ class HowdiesBot:
 
             url = "https://api.howdies.app/api/upload"
             mime = 'image/gif' if file_type.lower() == 'gif' else 'image/png'
-            
             files = {'file': (f'upload.{file_type}', image_bytes, mime)}
-            data = {
-                'token': self.token, 
-                'uploadType': 'image', 
-                'UserID': self.user_id if self.user_id else 0
-            }
+            data = {'token': self.token, 'uploadType': 'image', 'UserID': self.user_id if self.user_id else 0}
             
             r = requests.post(url, files=files, data=data, timeout=15)
-            
             if r.status_code == 200:
                 res = r.json()
                 return res.get('url') or res.get('data', {}).get('url')
-            else:
-                self.log(f"Upload Failed: {r.text}")
-                return None
-        except Exception as e:
-            self.log(f"Upload Error: {e}")
             return None
+        except: return None
 
     def send_dm(self, username, text):
         if not username: return
-        self.send_json({
-            "handler": "message",
-            "id": uuid.uuid4().hex,
-            "type": "text",
-            "to": username,
-            "text": text
-        })
+        self.send_json({"handler": "message", "id": uuid.uuid4().hex, "type": "text", "to": username, "text": text})
 
     def send_dm_image(self, username, image_url, text=""):
         if not username or not image_url: return
-        self.send_json({
-            "handler": "message",
-            "id": uuid.uuid4().hex,
-            "type": "image",
-            "to": username,
-            "url": image_url,
-            "text": text
-        })
-
-    # ==========================================
-    # ---  END NEW FUNCTIONS  ---
-    # ==========================================    
+        self.send_json({"handler": "message", "id": uuid.uuid4().hex, "type": "image", "to": username, "url": image_url, "text": text})
 
     def join_room(self, room_name, password=""):
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
