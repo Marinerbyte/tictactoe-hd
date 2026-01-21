@@ -4,7 +4,8 @@ import random
 import time
 import threading
 import math
-from PIL import Image, ImageDraw
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 
 # --- IMPORTS ---
 try: import utils
@@ -20,16 +21,17 @@ games = {}
 game_lock = threading.Lock()
 BOT_INSTANCE = None
 
+# Assets
 DICE_GIF = "https://media.tenor.com/2sWp_FhG2P4AAAAi/dice-roll.gif"
 
-# Config
-SAFE_SPOTS = [0, 8, 13, 21, 26, 34, 39, 47] 
-TOTAL_STEPS = 51
+# Configuration
+SAFE_SPOTS = [0, 8, 13, 21, 26, 34, 39, 47] # Global Step Indices
+PATH_LENGTH = 52
 
 def setup(bot):
     global BOT_INSTANCE
     BOT_INSTANCE = bot
-    print("[Ludo] Stable Engine Loaded.")
+    print("[Ludo] Pro Engine Loaded.")
 
 # --- CLEANUP ---
 def game_cleanup_loop():
@@ -45,23 +47,68 @@ def game_cleanup_loop():
 if threading.active_count() < 10: threading.Thread(target=game_cleanup_loop, daemon=True).start()
 
 # ==========================================
-# 🎨 GRAPHICS (Internal Dice Generator)
+# 🗺️ MAPPING ENGINE (Coordinate System)
 # ==========================================
 
-def draw_dice_face(number):
-    """Draws a Dice locally using PIL (Crash Proof)"""
-    size = 200
+def get_coordinates(global_step, p_idx):
+    """
+    Returns (Column, Row) for 15x15 Grid.
+    0,0 is Top-Left.
+    """
+    # Standard Ludo Path (Red Start Perspective)
+    # This path assumes Red starts at index 0 (coords 1,6)
+    # The path loops clockwise around the center.
+    main_path = [
+        (1,6), (2,6), (3,6), (4,6), (5,6), # 0-4
+        (6,5), (6,4), (6,3), (6,2), (6,1), (6,0), # 5-10
+        (7,0), (8,0), # 11-12
+        (8,1), (8,2), (8,3), (8,4), (8,5), (8,6), # 13-18
+        (9,6), (10,6), (11,6), (12,6), (13,6), (14,6), # 19-24
+        (14,7), (14,8), # 25-26
+        (13,8), (12,8), (11,8), (10,8), (9,8), (8,8), # 27-32
+        (8,9), (8,10), (8,11), (8,12), (8,13), (8,14), # 33-38
+        (7,14), (6,14), # 39-40
+        (6,13), (6,12), (6,11), (6,10), (6,9), (6,8), # 41-46
+        (5,8), (4,8), (3,8), (2,8), (1,8), (0,8), # 47-52
+        (0,7) # 51 (Last step before home turn)
+    ]
+    
+    # Offsets: Red=0, Green=13, Yellow=26, Blue=39
+    offset = p_idx * 13
+    
+    if global_step < 51:
+        # Main Track
+        actual_idx = (global_step + offset) % 52
+        return main_path[actual_idx]
+    else:
+        # Home Stretch (Inside)
+        home_step = global_step - 50 # 1 to 6
+        if p_idx == 0: return (home_step, 7) # Red (Right)
+        if p_idx == 1: return (7, home_step) # Green (Down)
+        if p_idx == 2: return (14-home_step, 7) # Yellow (Left)
+        if p_idx == 3: return (7, 14-home_step) # Blue (Up)
+        
+    return (7,7) # Winner Center
+
+# ==========================================
+# 🎨 GRAPHICS ENGINE
+# ==========================================
+
+def draw_dice(number):
+    """Draws a 3D looking dice"""
+    size = 150
     img = Image.new("RGBA", (size, size), (0,0,0,0))
     d = ImageDraw.Draw(img)
     
-    # White Box with Border
-    d.rounded_rectangle([10, 10, 190, 190], radius=30, fill="white", outline="#AAA", width=2)
+    # 3D Box
+    d.rounded_rectangle([10, 10, 140, 140], radius=20, fill="#FFF", outline="#888", width=2)
+    # Bevel/Shadow
+    d.rounded_rectangle([15, 120, 135, 140], radius=10, fill="#CCC") 
     
-    # Dot positions
     dots = []
     c = size // 2
-    l = size // 4
-    r = size * 3 // 4
+    l = size // 3.5
+    r = size - l
     
     if number == 1: dots = [(c, c)]
     elif number == 2: dots = [(l, l), (r, r)]
@@ -71,105 +118,134 @@ def draw_dice_face(number):
     elif number == 6: dots = [(l, l), (r, l), (l, c), (r, c), (l, r), (r, r)]
     
     for x, y in dots:
-        d.ellipse([x-15, y-15, x+15, y+15], fill="black")
+        d.ellipse([x-12, y-12, x+12, y+12], fill="black")
         
     return img
 
-def get_coordinates(global_step, color_idx):
-    path_map = [
-        (1,6), (2,6), (3,6), (4,6), (5,6), (6,5), (6,4), (6,3), (6,2), (6,1), (6,0),
-        (7,0), (8,0), (8,1), (8,2), (8,3), (8,4), (8,5), (9,6), (10,6), (11,6), (12,6), (13,6), (14,6),
-        (14,7), (14,8), (13,8), (12,8), (11,8), (10,8), (9,8), (8,9), (8,10), (8,11), (8,12), (8,13), (8,14),
-        (7,14), (6,14), (6,13), (6,12), (6,11), (6,10), (6,9), (5,8), (4,8), (3,8), (2,8), (1,8), (0,8), (0,7)
-    ]
-    offset = color_idx * 13
-    if global_step < 51:
-        actual_idx = (global_step + offset) % 52
-        return path_map[actual_idx]
-    else:
-        home_steps = global_step - 50
-        if color_idx == 0: return (home_steps, 7)
-        if color_idx == 1: return (7, home_steps)
-        if color_idx == 2: return (14-home_steps, 7)
-        if color_idx == 3: return (7, 14-home_steps)
-    return (7,7)
-
-def draw_ludo_board(players):
-    CELL = 50
-    W, H = CELL * 15, CELL * 15 + 100
-    OY = 100
-    img = utils.create_canvas(W, H, (30, 30, 35))
+def draw_board(players, pot):
+    CELL = 40
+    W, H = CELL * 15, CELL * 15 + 80 # Extra space for header
+    OY = 80 # Offset Y
+    
+    img = utils.create_canvas(W, H, (35, 40, 45))
     d = ImageDraw.Draw(img)
     
-    d.rectangle([0, OY, W, H], fill="white", outline="black", width=2)
+    # 1. Base Colors
+    colors = {
+        0: ("#FF4444", "#880000"), # Red
+        1: ("#44FF44", "#008800"), # Green
+        2: ("#FFFF44", "#888800"), # Yellow
+        3: ("#4444FF", "#000088")  # Blue
+    }
     
-    colors = {0:("#FF4500","#FFD700"), 1:("#32CD32","#ADFF2F"), 2:("#FFD700","#FFFFE0"), 3:("#1E90FF","#87CEFA")}
-    bases = [(0,0,"Red"), (9,0,"Green"), (9,9,"Yellow"), (0,9,"Blue")]
-    
-    for i, (bx, by, name) in enumerate(bases):
-        x, y = bx*CELL, by*CELL+OY
+    # 2. Draw 4 Bases
+    # TL, TR, BR, BL
+    base_positions = [(0,0,0), (9,0,1), (9,9,2), (0,9,3)]
+    for bx, by, pid in base_positions:
+        x, y = bx*CELL, by*CELL + OY
         size = 6*CELL
-        d.rectangle([x, y, x+size, y+size], fill=colors[i][0], outline="black", width=2)
-        d.rectangle([x+CELL, y+CELL, x+size-CELL, y+size-CELL], fill="white", outline="black", width=2)
+        d.rectangle([x, y, x+size, y+size], fill=colors[pid][0], outline="black")
+        d.rectangle([x+30, y+30, x+size-30, y+size-30], fill="white")
         
-        p = players[i]
+        # Draw Big Avatar if player in base
+        p = players[pid]
         if p:
-            utils.write_text(d, (x+size//2, y+size-30), f"@{p['name'][:8]}", size=20, align="center", col="black")
-            if p['av']:
-                av = utils.get_circle_avatar(p['av'], size=100)
-                if av: img.paste(av, (x+size//2-50, y+size//2-50), av)
+            if p['pos'] == -1: # In Base
+                if p['av']:
+                    av = utils.get_circle_avatar(p['av'], size=100)
+                    if av: img.paste(av, (x+70, y+70), av)
+            utils.write_text(d, (x+size//2, y+size-25), f"@{p['name'][:8]}", size=18, align="center", col="black")
+        else:
+            utils.write_text(d, (x+size//2, y+size//2), "EMPTY", size=20, align="center", col="#AAA")
 
-    for i in range(15):
-        for j in range(15):
-            if not ((i<6 and j<6) or (i>8 and j<6) or (i>8 and j>8) or (i<6 and j>8)):
-                px, py = i*CELL, j*CELL+OY
-                d.rectangle([px, py, px+CELL, py+CELL], outline="black", width=1)
-                if j==7 and 0<i<6: d.rectangle([px, py, px+CELL, py+CELL], fill=colors[0][0], outline="black")
-                if i==7 and 0<j<6: d.rectangle([px, py, px+CELL, py+CELL], fill=colors[1][0], outline="black")
-                if j==7 and 8<i<14: d.rectangle([px, py, px+CELL, py+CELL], fill=colors[2][0], outline="black")
-                if i==7 and 8<j<14: d.rectangle([px, py, px+CELL, py+CELL], fill=colors[3][0], outline="black")
+    # 3. Draw Paths (The Cross)
+    # Vertical Strip
+    d.rectangle([6*CELL, OY, 9*CELL, 15*CELL+OY], fill="white")
+    # Horizontal Strip
+    d.rectangle([0, 6*CELL+OY, 15*CELL, 9*CELL+OY], fill="white")
+    
+    # Colored Home Paths
+    # Red (Left)
+    d.rectangle([CELL, 7*CELL+OY, 6*CELL, 8*CELL+OY], fill=colors[0][0])
+    # Green (Top)
+    d.rectangle([7*CELL, CELL+OY, 8*CELL, 6*CELL+OY], fill=colors[1][0])
+    # Yellow (Right)
+    d.rectangle([9*CELL, 7*CELL+OY, 14*CELL, 8*CELL+OY], fill=colors[2][0])
+    # Blue (Bottom)
+    d.rectangle([7*CELL, 9*CELL+OY, 8*CELL, 14*CELL+OY], fill=colors[3][0])
+    
+    # Grid Lines
+    for i in range(16):
+        # Vertical lines
+        d.line([i*CELL, OY, i*CELL, 15*CELL+OY], fill="black", width=1)
+        # Horizontal lines
+        d.line([0, i*CELL+OY, 15*CELL, i*CELL+OY], fill="black", width=1)
 
-    center_box = [6*CELL, 6*CELL + OY, 9*CELL, 9*CELL + OY]
-    d.polygon([(6*CELL, 6*CELL+OY), (9*CELL, 6*CELL+OY), (7.5*CELL, 7.5*CELL+OY)], fill=colors[1][0], outline="black") 
-    d.polygon([(9*CELL, 6*CELL+OY), (9*CELL, 9*CELL+OY), (7.5*CELL, 7.5*CELL+OY)], fill=colors[2][0], outline="black") 
-    d.polygon([(9*CELL, 9*CELL+OY), (6*CELL, 9*CELL+OY), (7.5*CELL, 7.5*CELL+OY)], fill=colors[3][0], outline="black") 
-    d.polygon([(6*CELL, 9*CELL+OY), (6*CELL, 6*CELL+OY), (7.5*CELL, 7.5*CELL+OY)], fill=colors[0][0], outline="black") 
-    utils.write_text(d, (7.5*CELL, 7.5*CELL + OY), "HOME", size=25, align="center", col="white", shadow=True)
+    # 4. Center Home (Triangles)
+    cx, cy = 7.5*CELL, 7.5*CELL + OY
+    d.polygon([(6*CELL, 6*CELL+OY), (9*CELL, 6*CELL+OY), (cx, cy)], fill=colors[1][0], outline="black")
+    d.polygon([(9*CELL, 6*CELL+OY), (9*CELL, 9*CELL+OY), (cx, cy)], fill=colors[2][0], outline="black")
+    d.polygon([(9*CELL, 9*CELL+OY), (6*CELL, 9*CELL+OY), (cx, cy)], fill=colors[3][0], outline="black")
+    d.polygon([(6*CELL, 9*CELL+OY), (6*CELL, 6*CELL+OY), (cx, cy)], fill=colors[0][0], outline="black")
+    
+    # Pot Info
+    utils.write_text(d, (cx, cy-15), "POT", size=16, align="center", col="white", shadow=True)
+    utils.write_text(d, (cx, cy+5), str(pot), size=20, align="center", col="#FFD700", shadow=True)
 
-    pos_map = {}
+    # 5. Tokens (The Important Part)
+    # Calculate overlaps first
+    cell_occupants = {}
     for i, p in enumerate(players):
-        if not p or p['pos'] == -1: continue
+        if not p or p['pos'] == -1: continue # Ignore base players
+        
         gx, gy = get_coordinates(p['pos'], i)
-        if (gx, gy) not in pos_map: pos_map[(gx,gy)] = []
-        pos_map[(gx,gy)].append(i)
-
-    for (gx, gy), p_idxs in pos_map.items():
-        cx = gx*CELL + CELL//2
-        cy = gy*CELL + CELL//2 + OY
-        shift = 10 if len(p_idxs) > 1 else 0
+        key = (gx, gy)
+        if key not in cell_occupants: cell_occupants[key] = []
+        cell_occupants[key].append(i)
+        
+    # Render Tokens
+    for (gx, gy), p_idxs in cell_occupants.items():
+        base_x = gx * CELL + CELL//2
+        base_y = gy * CELL + CELL//2 + OY
+        
+        count = len(p_idxs)
+        offset_step = 10
+        
         for idx, p_idx in enumerate(p_idxs):
-            off_x = (idx - (len(p_idxs)-1)/2) * shift
-            token_col = colors[p_idx][0]
-            d.ellipse([cx-18+off_x, cy-18, cx+18+off_x, cy+18], fill=token_col, outline="white", width=2)
-            if players[p_idx]['av']:
-                av = utils.get_circle_avatar(players[p_idx]['av'], size=30)
-                if av: img.paste(av, (int(cx-15+off_x), int(cy-15)), av)
+            # Calculate Shift for overlap
+            shift = (idx - (count-1)/2) * offset_step
+            tx = base_x + shift
+            ty = base_y - shift # Diagonal shift
+            
+            p = players[p_idx]
+            col = colors[p_idx][0]
+            
+            # Token Body (Pin Shape)
+            d.ellipse([tx-16, ty-16, tx+16, ty+16], fill=col, outline="white", width=2)
+            
+            # Mini Avatar inside
+            if p['av']:
+                mini_av = utils.get_circle_avatar(p['av'], size=24)
+                if mini_av: img.paste(mini_av, (int(tx-12), int(ty-12)), mini_av)
 
-    utils.write_text(d, (W//2, 30), "🎲 LUDO: ONE TOKEN", size=40, align="center", col="#FFD700", shadow=True)
+    # 6. Header Status
+    utils.write_text(d, (W//2, 25), "🎲 LUDO: ONE TOKEN", size=30, align="center", col="#FFD700", shadow=True)
+    
     turn_p = next((p for p in players if p and p['turn']), None)
     if turn_p:
-        utils.write_text(d, (W//2, 70), f"Turn: @{turn_p['name']}", size=25, align="center", col="white")
+        utils.write_text(d, (W//2, 55), f"Turn: @{turn_p['name']}", size=20, align="center", col="white")
 
     return img
 
 # ==========================================
-# ⚙️ LOGIC
+# ⚙️ GAME LOGIC
 # ==========================================
 
 class LudoGame:
     def __init__(self, room_id, bet):
         self.room_id = room_id
         self.bet = bet
+        self.pot = 0
         self.players = [None] * 4
         self.state = 'waiting'
         self.turn_idx = 0
@@ -178,7 +254,11 @@ class LudoGame:
     def add_player(self, uid, name, av):
         for i in range(4):
             if self.players[i] is None:
-                self.players[i] = {'id': i, 'uid': uid, 'name': name, 'av': av, 'pos': -1, 'turn': False}
+                self.players[i] = {
+                    'id': i, 'uid': uid, 'name': name, 'av': av,
+                    'pos': -1, 'turn': False
+                }
+                self.pot += self.bet
                 return i
         return -1
 
@@ -196,28 +276,47 @@ class LudoGame:
 
     def move_token(self, p_idx, dice):
         p = self.players[p_idx]
+        
+        # Unlock logic
         if p['pos'] == -1:
-            if dice == 6: 
-                p['pos'] = 0
+            if dice == 6:
+                p['pos'] = 0 # Start
                 return "open"
             return "stuck"
-        
+            
         new_pos = p['pos'] + dice
-        if new_pos > 56: return "bounce"
+        
+        # Victory check
         if new_pos == 56: 
             p['pos'] = 56
             return "win"
-            
-        my_global = (new_pos + (p_idx * 13)) % 52
-        if new_pos > 50: my_global = -100 
+        if new_pos > 56: return "bounce"
+        
+        # Kill Logic
+        # Calculate my global grid index
+        my_gx, my_gy = get_coordinates(new_pos, p_idx)
         
         killed = None
-        if my_global not in SAFE_SPOTS and my_global != -100:
-            for i, enemy in enumerate(self.players):
-                if enemy and i != p_idx and enemy['pos'] != -1 and enemy['pos'] <= 50:
-                    enemy_global = (enemy['pos'] + (i * 13)) % 52
-                    if enemy_global == my_global:
-                        enemy['pos'] = -1
+        # Check collision with others
+        for i, enemy in enumerate(self.players):
+            if enemy and i != p_idx and enemy['pos'] > -1 and enemy['pos'] < 51:
+                en_gx, en_gy = get_coordinates(enemy['pos'], i)
+                
+                # If coords match
+                if my_gx == en_gx and my_gy == en_gy:
+                    # Check Safe Spot
+                    # Is this coord a safe spot?
+                    # Safe spots global indices for P0: 0, 8, 13...
+                    # It's hard to map back. Let's simplify:
+                    # If steps match safe indices relative to start.
+                    # Standard safe indices from start: 0, 8, 13, 21...
+                    
+                    is_safe = False
+                    # Safe spots relative to anyone's start
+                    if new_pos in [0, 8, 13, 21, 26, 34, 39, 47]: is_safe = True
+                    
+                    if not is_safe:
+                        enemy['pos'] = -1 # Send Home
                         killed = enemy['name']
         
         p['pos'] = new_pos
@@ -229,28 +328,32 @@ def handle_command(bot, command, room_id, user, args, data):
     av = f"https://cdn.howdies.app/avatar?image={av_file}" if av_file else None
     cmd = command.lower().strip()
     
+    # 1. CREATE
     if cmd == "ludo":
         bet = int(args[0]) if args and args[0].isdigit() else 0
         with game_lock:
             if room_id in games: return True
             g = LudoGame(room_id, bet)
             g.add_player(uid, user, av)
-            if bet>0: add_game_result(uid, user, "ludo", -bet, False)
+            if bet > 0: add_game_result(uid, user, "ludo", -bet, False)
             games[room_id] = g
-        bot.send_message(room_id, f"🎲 **Ludo Created!** Bet: {bet}\nType `!join`")
+        bot.send_message(room_id, f"🎲 **Ludo Created!** Bet: {bet}\nWaiting for players... `!join`")
         return True
 
+    # 2. JOIN
     if cmd == "join":
         with game_lock:
             g = games.get(room_id)
             if not g or g.state != 'waiting': return False
             if any(p and str(p['uid']) == str(uid) for p in g.players): return True
+            
             idx = g.add_player(uid, user, av)
             if idx != -1:
-                if g.bet>0: add_game_result(uid, user, "ludo", -g.bet, False)
+                if g.bet > 0: add_game_result(uid, user, "ludo", -g.bet, False)
                 bot.send_message(room_id, f"✅ **{user}** Joined!")
         return True
 
+    # 3. START
     if cmd == "start":
         with game_lock:
             g = games.get(room_id)
@@ -260,55 +363,65 @@ def handle_command(bot, command, room_id, user, args, data):
                 return True
             g.state = 'playing'
             g.players[0]['turn'] = True
-            link = utils.upload(bot, draw_ludo_board(g.players))
+            
+            link = utils.upload(bot, draw_board(g.players, g.pot))
             bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Start"})
             bot.send_message(room_id, f"🚦 Go! @{g.players[0]['name']} `!roll`")
         return True
 
+    # 4. ROLL
     if cmd == "roll":
+        # Turn Check
+        with game_lock:
+            g = games.get(room_id)
+            if not g or g.state != 'playing': return True
+            if str(g.players[g.turn_idx]['uid']) != str(uid): return True
+            
         utils.run_in_bg(process_turn, bot, room_id, uid)
         return True
-
+        
+    # 5. STOP
     if cmd == "stop":
         with game_lock:
             if room_id in games: del games[room_id]
             bot.send_message(room_id, "🛑 Stopped.")
         return True
+
     return False
 
 def process_turn(bot, room_id, uid):
-    with game_lock:
-        g = games.get(room_id)
-        if not g: return
-        curr_p = g.players[g.turn_idx]
-        if str(curr_p['uid']) != str(uid): return
-
+    # 1. Illusion (GIF)
     bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": DICE_GIF, "text": "Rolling"})
     time.sleep(2.5)
     
     dice = random.randint(1, 6)
+    
     with game_lock:
         g = games.get(room_id)
         if not g: return
+        
+        # 2. Logic
         result = g.move_token(g.turn_idx, dice)
         
-        # Internal Draw (Crash Proof)
-        dice_img = draw_dice_face(dice)
+        # 3. Send Dice Image
+        dice_img = draw_dice(dice)
         dice_link = utils.upload(bot, dice_img)
         bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": dice_link, "text": str(dice)})
         
+        # Win Check
         if result == "win":
-            rew = g.bet * sum(1 for p in g.players if p)
-            add_game_result(uid, curr_p['name'], "ludo", rew, True)
-            bot.send_message(room_id, f"🏆 {curr_p['name']} Wins {rew} Coins!")
+            winner = g.players[g.turn_idx]['name']
+            add_game_result(uid, winner, "ludo", g.pot, True)
+            bot.send_message(room_id, f"🏆 **{winner} WINS!** +{g.pot}")
             del games[room_id]
             return
             
+        # Msg
         msg = f"Rolled {dice}. "
-        if result == "open": msg += "Unlocked!"
+        if result == "open": msg += "🔓 Unlocked!"
         elif result.startswith("kill"): msg += f"⚔️ Killed {result.split()[1]}!"
         elif result == "stuck": 
-            msg += "Need 6 to open."
+            msg += "Locked."
             g.next_turn()
         elif result == "bounce":
             msg += "Too high."
@@ -317,9 +430,10 @@ def process_turn(bot, room_id, uid):
             if dice != 6: g.next_turn()
             else: msg += "Roll again!"
             
-        link = utils.upload(bot, draw_ludo_board(g.players))
+        # 4. Board Update
+        link = utils.upload(bot, draw_board(g.players, g.pot))
         bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Board"})
         
         if result != "win":
-            next_name = g.players[g.turn_idx]['name']
-            bot.send_message(room_id, f"{msg}\n👉 @{next_name}'s Turn")
+            nxt = g.players[g.turn_idx]['name']
+            bot.send_message(room_id, f"{msg}\n👉 @{nxt}")
