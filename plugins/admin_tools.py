@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import math
+import time
 from PIL import ImageDraw
 
 # --- IMPORTS ---
@@ -10,41 +11,30 @@ except ImportError: print("[Admin] Error: utils.py not found!")
 
 # --- STATE ---
 pagination_state = {} 
+# SPAM FIX: Sirf tabhi profile banao jab user ne manga ho
+pending_profiles = [] 
 
 def setup(bot):
-    print("[Admin Tools] Brute Force Loaded.")
+    print("[Admin Tools] Anti-Spam & All-Fix Loaded.")
 
 # ==========================================
-# 🧠 BRUTE FORCE ID FINDER (Jad Se Nikalo)
+# 🧠 BRUTE FORCE ID FINDER (Jo Kick me kaam kiya)
 # ==========================================
 
 def find_user_id_anywhere(bot, username):
-    """
-    Ye function room-woom nahi dekhta.
-    Ye bot ki puri memory me jahan bhi wo naam dikhega, ID utha layega.
-    """
     target = username.lower().strip()
-    
-    # Bot ki saari known rooms check karo
     for room_name, room_data in bot.room_details.items():
         id_map = room_data.get('id_map', {})
-        
-        # 1. Direct Match
-        if target in id_map:
-            return id_map[target]
-            
-        # 2. Partial Match (Agar naam milta julta ho)
+        if target in id_map: return id_map[target]
         for name, uid in id_map.items():
-            if target == name: # Exact match scan
-                return uid
-                
+            if target == name: return uid
     return None
 
 def force_refresh_list(bot, room_id):
     bot.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
 
 # ==========================================
-# 🎨 VISUALS (Cards)
+# 🎨 VISUALS
 # ==========================================
 
 def draw_profile_card(data):
@@ -84,82 +74,91 @@ def draw_user_list(users_chunk, page, total_pages):
     return img
 
 # ==========================================
-# ⚙️ HANDLER
+# ⚙️ SYSTEM MESSAGE (ANTI-SPAM FIX)
 # ==========================================
 
 def process_system_message(bot, data):
+    global pending_profiles
     if data.get("handler") == "profile":
-        try:
-            link = utils.upload(bot, draw_profile_card(data))
-            if link and bot.active_rooms:
-                # Broadcast to active room
-                r_name = bot.active_rooms[0]
-                if r_name in bot.room_details:
-                    rid = bot.room_details[r_name]['id']
-                    bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "Profile"})
-        except: pass
+        username = data.get("username")
+        
+        # SPAM FIX: Check agar ye user requested list me hai
+        if username in pending_profiles:
+            try:
+                link = utils.upload(bot, draw_profile_card(data))
+                if link and bot.active_rooms:
+                    r_name = bot.active_rooms[0]
+                    if r_name in bot.room_details:
+                        rid = bot.room_details[r_name]['id']
+                        bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "Profile"})
+                
+                # LIST SE HATA DO (Taaki dubara na bheje)
+                pending_profiles.remove(username)
+            except: pass
+
+# ==========================================
+# ⚙️ COMMAND HANDLER
+# ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     target_name = args[0].replace("@", "") if args else None
 
-    # --- 0. CHECK/DEBUG (!check @user) ---
-    if cmd == "check":
-        if not target_name: return True
-        uid = find_user_id_anywhere(bot, target_name)
-        if uid:
-            bot.send_message(room_id, f"✅ **Found:** @{target_name} -> ID: `{uid}`")
-        else:
-            bot.send_message(room_id, f"❌ **Not Found:** @{target_name} (Memory me nahi hai)")
-            force_refresh_list(bot, room_id)
-        return True
-
-    # --- 1. KICK (!k / !kick) ---
+    # --- 1. KICK (!k) ---
     if cmd in ["k", "kick"]:
         if not target_name: return True
-        
         uid = find_user_id_anywhere(bot, target_name)
         if uid:
-            # METHOD 1: String ID
             bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": str(uid)})
-            # METHOD 2: Int ID (Backup)
-            try: bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": int(uid)})
-            except: pass
-            
             bot.send_message(room_id, f"🦵 **Kicked** @{target_name}")
         else:
             force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "❌ ID nahi mili. Refreshing...")
+            bot.send_message(room_id, "❌ ID Not Found.")
         return True
 
-    # --- 2. BAN (!b / !ban) ---
-    if cmd in ["b", "ban"]:
+    # --- 2. MUTE (!m / !mute) ---
+    if cmd in ["m", "mute"]:
         if not target_name: return True
-        
         uid = find_user_id_anywhere(bot, target_name)
         if uid:
-            # ID Based
-            bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "targetid": str(uid), "role": "outcast"})
+            bot.send_json({"handler": "muteuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": str(uid)})
+            bot.send_message(room_id, f"🤐 **Muted** @{target_name}")
         else:
-            # Username Based (Backup)
-            bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "target": target_name, "role": "outcast"})
-            
-        bot.send_message(room_id, f"🚫 **Banned** @{target_name}")
+            bot.send_message(room_id, "❌ ID Not Found.")
         return True
 
-    # --- 3. OWNER (!o / !owner) ---
+    # --- 3. UNMUTE (!unmute) ---
+    if cmd == "unmute":
+        if not target_name: return True
+        uid = find_user_id_anywhere(bot, target_name)
+        if uid:
+            bot.send_json({"handler": "unmuteuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": str(uid)})
+            bot.send_message(room_id, f"🗣️ **Unmuted** @{target_name}")
+        return True
+
+    # --- 4. BAN (!b / !ban) ---
+    if cmd in ["b", "ban"]:
+        if not target_name: return True
+        uid = find_user_id_anywhere(bot, target_name)
+        if uid:
+            bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "targetid": str(uid), "role": "outcast"})
+            bot.send_message(room_id, f"🚫 **Banned** @{target_name}")
+        else:
+            bot.send_message(room_id, "❌ ID Not Found.")
+        return True
+
+    # --- 5. OWNER (!o / !owner) ---
     if cmd in ["o", "owner"]:
         if not target_name: return True
-        
         uid = find_user_id_anywhere(bot, target_name)
         if uid:
             bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "targetid": str(uid), "role": "owner"})
             bot.send_message(room_id, f"👑 **Owner:** @{target_name}")
         else:
-            bot.send_message(room_id, "❌ User ID not found.")
+            bot.send_message(room_id, "❌ ID Not Found.")
         return True
 
-    # --- 4. ADMIN (!a / !admin) ---
+    # --- 6. ADMIN (!a / !admin) ---
     if cmd in ["a", "admin"]:
         if not args or len(args) < 2: return True
         action = args[0].lower()
@@ -167,7 +166,7 @@ def handle_command(bot, command, room_id, user, args, data):
         uid = find_user_id_anywhere(bot, target)
         
         if not uid:
-            bot.send_message(room_id, "❌ ID not found.")
+            bot.send_message(room_id, "❌ ID Not Found.")
             return True
 
         if action == "add":
@@ -178,41 +177,59 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, f"⬇️ Demoted **@{target}**")
         return True
 
-    # --- 5. INVITE (!i) ---
+    # --- 7. INVITE (!i / !invite) ---
     if cmd in ["i", "invite"]:
         if not target_name: return True
-        bot.send_json({"handler": "chatroominvite", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_name})
+        # Invite ke liye ID try karte hain pehle (better chance)
+        uid = find_user_id_anywhere(bot, target_name)
+        if uid:
+            bot.send_json({"handler": "chatroominvite", "id": uuid.uuid4().hex, "roomid": room_id, "userid": str(uid)})
+        else:
+            # Fallback to username
+            bot.send_json({"handler": "chatroominvite", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_name})
+        
         bot.send_message(room_id, f"📨 Invited @{target_name}")
         return True
 
-    # --- 6. PROFILE (!pro) ---
+    # --- 8. PROFILE (!pro) ---
     if cmd in ["pro", "profile"]:
         target = target_name if target_name else user
-        bot.send_message(room_id, f"🔍 Profile: **@{target}**")
-        bot.send_json({"handler": "profile", "id": uuid.uuid4().hex, "username": target})
+        
+        # SPAM FIX: Add to pending list
+        if target not in pending_profiles:
+            pending_profiles.append(target)
+            bot.send_message(room_id, f"🔍 Fetching profile for **@{target}**...")
+            bot.send_json({"handler": "profile", "id": uuid.uuid4().hex, "username": target})
         return True
 
-    # --- 7. USERS LIST (!u) ---
+    # --- 9. USERS LIST (!u) ---
     if cmd in ["u", "users", "list"]:
-        r_name = bot.room_id_to_name_map.get(str(room_id))
-        room_data = bot.room_details.get(r_name) if r_name else bot.room_details.get(room_id)
-        users = room_data.get('users', []) if room_data else []
+        # Memory Check
+        id_map = {}
+        for r_data in bot.room_details.values():
+            if r_data.get('id') == str(room_id) or r_data.get('id') == room_id:
+                id_map = r_data.get('id_map', {})
+                break
         
-        if not users:
-            force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "🔄 Syncing...")
-            return True
-            
+        # Agar map khali hai to global check
+        if not id_map:
+             # Just grab names from first available room as fallback or ask refresh
+             force_refresh_list(bot, room_id)
+             bot.send_message(room_id, "🔄 Syncing List... Type `!u` again.")
+             return True
+
+        users = list(id_map.keys())
         pagination_state[room_id] = {'users': users, 'page': 1}
-        total = math.ceil(len(users) / 10)
+        
         chunk = users[:10]
+        total = math.ceil(len(users) / 10)
         
         img = draw_user_list(chunk, 1, total)
         link = utils.upload(bot, img)
         bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "List"})
         return True
 
-    # --- 8. NEXT (!n) ---
+    # --- 10. NEXT (!n) ---
     if cmd == "n":
         state = pagination_state.get(room_id)
         if not state: return True
