@@ -12,38 +12,61 @@ except ImportError: print("[Admin] Error: utils.py not found!")
 pagination_state = {} 
 
 def setup(bot):
-    print("[Admin Tools] Stable Version Loaded.")
+    print("[Admin Tools] Fixed Version Loaded.")
 
 # ==========================================
-# 🧠 SIMPLE & SOLID ID FINDER
+# 🧠 ID FINDER (Woh Logic Jo Kaam Kar Raha Hai)
 # ==========================================
 
 def get_target_id(bot, room_id, username):
-    """
-    Ye wahi function hai jo pehle kaam kar raha tha.
-    Sirf current room check karega (Reliable).
-    """
     target = username.lower().strip()
-    
-    # 1. Room Name se data nikalo
     r_name = bot.room_id_to_name_map.get(str(room_id))
+    
+    sources = []
+    # 1. Try Current Room Name
     if r_name and r_name in bot.room_details:
-        id_map = bot.room_details[r_name].get('id_map', {})
-        if target in id_map: return id_map[target]
-        
-    # 2. Room ID se data nikalo (Backup)
+        sources.append(bot.room_details[r_name].get('id_map', {}))
+    # 2. Try Current Room ID
     if room_id in bot.room_details:
-        id_map = bot.room_details[room_id].get('id_map', {})
+        sources.append(bot.room_details[room_id].get('id_map', {}))
+        
+    for id_map in sources:
+        # Direct Match
         if target in id_map: return id_map[target]
-
+        # Partial match (e.g. "yas" for "yasin")
+        for name, uid in id_map.items():
+            if target in name: return uid
+            
     return None
 
 def force_refresh_list(bot, room_id):
     bot.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
 
 # ==========================================
-# 🎨 VISUALS
+# 🎨 CARDS (Profile & Users)
 # ==========================================
+
+def draw_profile_card(data):
+    username = data.get("username", "Unknown")
+    W, H = 600, 400
+    img = utils.create_canvas(W, H, (20, 20, 25))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 100], fill=(40, 50, 70))
+    utils.write_text(d, (W//2, 50), "USER PROFILE", size=35, align="center", col="#00FFFF", shadow=True)
+    pic = data.get("image", "")
+    avatar_url = f"https://cdn.howdies.app/avatar?image={pic}" if pic else f"https://api.dicebear.com/9.x/notionists/png?seed={username}"
+    av = utils.get_circle_avatar(avatar_url, size=150)
+    if av:
+        d.ellipse([45, 125, 205, 285], outline="white", width=4)
+        img.paste(av, (50, 130), av)
+    x_start = 230
+    y_start = 140
+    utils.write_text(d, (x_start, y_start), f"@{username}", size=32, align="left", col="#FFD700")
+    role = data.get("role", "Member")
+    joined = data.get("created", "Unknown")[:10]
+    utils.write_text(d, (x_start, y_start + 65), f"🔹 Role: {role.upper()}", size=22, col="white")
+    utils.write_text(d, (x_start, y_start + 110), f"📅 Joined: {joined}", size=22, col="#AAA")
+    return img
 
 def draw_user_list(users_chunk, page, total_pages):
     W, H = 500, 600
@@ -61,33 +84,12 @@ def draw_user_list(users_chunk, page, total_pages):
     utils.write_text(d, (W//2, H-40), "Type !n for next page", size=18, align="center", col="#FFFF00")
     return img
 
-def draw_profile_card(data):
-    username = data.get("username", "Unknown")
-    W, H = 600, 400
-    img = utils.create_canvas(W, H, (20, 20, 25))
-    d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, 100], fill=(40, 50, 70))
-    utils.write_text(d, (W//2, 50), "USER PROFILE", size=35, align="center", col="#00FFFF", shadow=True)
-    pic = data.get("image", "")
-    avatar_url = f"https://cdn.howdies.app/avatar?image={pic}" if pic else f"https://api.dicebear.com/9.x/adventurer/png?seed={username}"
-    av = utils.get_circle_avatar(avatar_url, size=150)
-    if av:
-        d.ellipse([45, 125, 205, 285], outline="white", width=4)
-        img.paste(av, (50, 130), av)
-    x_start = 230
-    y_start = 140
-    utils.write_text(d, (x_start, y_start), f"@{username}", size=32, align="left", col="#FFD700")
-    role = data.get("role", "Member")
-    joined = data.get("created", "Unknown")[:10]
-    utils.write_text(d, (x_start, y_start + 45*1.5), f"🔹 Role: {role.upper()}", size=22, col="white")
-    utils.write_text(d, (x_start, y_start + 45*2.5), f"📅 Joined: {joined}", size=22, col="#AAA")
-    return img
-
 # ==========================================
 # ⚙️ HANDLERS
 # ==========================================
 
 def process_system_message(bot, data):
+    # Profile data pakadne ke liye
     if data.get("handler") == "profile":
         try:
             link = utils.upload(bot, draw_profile_card(data))
@@ -104,16 +106,18 @@ def handle_command(bot, command, room_id, user, args, data):
 
     # --- 1. KICK (!k) ---
     if cmd in ["k", "kick"]:
-        if not target_name: return True
+        if not target_name:
+            bot.send_message(room_id, "Usage: `!k @username`")
+            return True
         
         uid = get_target_id(bot, room_id, target_name)
         if uid:
-            # Ye wahi code hai jo chala tha
+            # Wahi logic jo kaam kiya tha
             bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": room_id, "to": str(uid)})
             bot.send_message(room_id, f"🦵 **Kicked** @{target_name}")
         else:
             force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "❌ ID nahi mili. Refreshing...")
+            bot.send_message(room_id, "❌ ID nahi mili. List refresh kar di hai.")
         return True
 
     # --- 2. BAN (!b) ---
@@ -121,13 +125,14 @@ def handle_command(bot, command, room_id, user, args, data):
         if not target_name: return True
         
         uid = get_target_id(bot, room_id, target_name)
+        # Ban me bhi ID use karenge
         if uid:
-            # Ab ye bhi ID use karega (Jaise Kick ne kiya)
             bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "targetid": str(uid), "role": "outcast"})
-            bot.send_message(room_id, f"🚫 **Banned** @{target_name} (ID: {uid})")
+            bot.send_message(room_id, f"🚫 **Banned** @{target_name}")
         else:
-            force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "❌ ID nahi mili. Refreshing...")
+            # Fallback to username agar ID na mile (Chance hai chal jaye)
+            bot.send_json({"handler": "changerole", "id": uuid.uuid4().hex, "roomid": room_id, "target": target_name, "role": "outcast"})
+            bot.send_message(room_id, f"🚫 Trying to Ban @{target_name}...")
         return True
 
     # --- 3. OWNER (!o) ---
@@ -140,20 +145,22 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, f"👑 **Owner:** @{target_name}")
         else:
             force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "❌ ID nahi mili. Refreshing...")
+            bot.send_message(room_id, "⚠️ User ID not found. Refreshing...")
         return True
 
     # --- 4. ADMIN (!a) ---
     if cmd in ["a", "admin"]:
-        if not args or len(args) < 2: return True
+        if not args or len(args) < 2: 
+            bot.send_message(room_id, "Usage: `!a add @user`")
+            return True
+            
         action = args[0].lower()
         target = args[1].replace("@", "")
-        
         uid = get_target_id(bot, room_id, target)
         
         if not uid:
             force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "❌ ID nahi mili. Refreshing...")
+            bot.send_message(room_id, "❌ ID Not Found.")
             return True
 
         if action == "add":
@@ -169,7 +176,7 @@ def handle_command(bot, command, room_id, user, args, data):
     # --- 5. INVITE (!i) ---
     if cmd in ["i", "invite"]:
         if not target_name: return True
-        # Invite Username par chalta hai (Docs confirmed)
+        # Invite Username par chalta hai
         bot.send_json({"handler": "chatroominvite", "id": uuid.uuid4().hex, "roomid": room_id, "to": target_name})
         bot.send_message(room_id, f"📨 Invited @{target_name}")
         return True
@@ -190,7 +197,7 @@ def handle_command(bot, command, room_id, user, args, data):
         
         if not users:
             force_refresh_list(bot, room_id)
-            bot.send_message(room_id, "🔄 Syncing...")
+            bot.send_message(room_id, "🔄 Syncing... Try `!u` again.")
             return True
             
         pagination_state[room_id] = {'users': users, 'page': 1}
