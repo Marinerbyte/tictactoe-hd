@@ -17,6 +17,7 @@ class HowdiesBot:
         self.user_id = None; self.active_rooms = []; self.logs = []
         self.running = False; self.start_time = time.time()
         
+        # Room Data Storage
         self.room_details = {}
         self.room_id_to_name_map = {}
         
@@ -53,7 +54,8 @@ class HowdiesBot:
         url = WS_URL.format(self.token)
         self.ws = websocket.WebSocketApp(url, on_open=self.on_open, on_message=self.on_message, on_error=self.on_error, on_close=self.on_close)
         self.running = True
-        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=10)); self.ws_thread.daemon = True; self.ws_thread.start()
+        # Ping Interval 15s (Stable Connection)
+        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=15, ping_timeout=10)); self.ws_thread.daemon = True; self.ws_thread.start()
 
     def on_open(self, ws):
         self.log("WebSocket Connected.")
@@ -65,37 +67,40 @@ class HowdiesBot:
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
-            handler = data.get("handler")
             
             # ======================================================
-            # 🛠️ FIX: UNIVERSAL EXTRACTOR (Enhanced)
+            # 🛠️ THE UNIVERSAL EXTRACTOR (Jad se ilaaj)
             # ======================================================
-            # 1. Username Hunting
-            extracted_user = (
+            # Server alag-alag naam se data bhejta hai, hum yahan fix kar rahe hain.
+            
+            # 1. USERNAME FIX
+            # Agar 'username' nahi mila, to 'from' ya 'sender' check karo
+            final_username = (
                 data.get("username") or 
                 data.get("from") or 
                 data.get("sender") or 
-                data.get("to") or 
-                data.get("author") or
-                data.get("nick")
+                data.get("to")
             )
             
-            # 2. UserID Hunting (Ab CamelCase 'userId' bhi check karega)
-            extracted_uid = (
+            # 2. USER ID FIX
+            # CamelCase 'userId' aur normal 'userid' dono check karo
+            final_userid = (
                 data.get("userid") or 
-                data.get("userId") or  # <-- Added CamelCase
+                data.get("userId") or 
                 data.get("id") or 
-                data.get("user_id") or 
-                data.get("from_id") or
-                data.get("fromId")     # <-- Added CamelCase
+                data.get("user_id") or
+                data.get("from_id")
             )
 
-            # 3. Force Inject
-            if extracted_user: data["username"] = extracted_user
-            if extracted_uid: data["userid"] = str(extracted_uid)
+            # 3. Data me Wapas Daal Do (Standardization)
+            if final_username: data["username"] = final_username
+            if final_userid: data["userid"] = str(final_userid)
+            
             # ======================================================
 
-            # System Message Pass
+            handler = data.get("handler")
+
+            # --- SYSTEM MESSAGE PASS ---
             if hasattr(self.plugins, 'process_system_message'):
                 self.plugins.process_system_message(data)
 
@@ -131,14 +136,8 @@ class HowdiesBot:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
                 self.plugins.process_message(data)
 
-            # 2. Handle Private Messages (DMs) - DEBUG ADDED
+            # 2. Handle Private Messages (DMs)
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
-                # 👇 DEBUG PRINT (Console me dekhein DM aate hi)
-                print(f"\n[DEBUG DM] RAW DATA: {data}\n")
-                
-                if not data.get("username"):
-                    print("[ERROR] Username abhi bhi None hai!")
-                
                 self.plugins.process_message(data)            
 
             # 3. Join Success
@@ -146,26 +145,30 @@ class HowdiesBot:
                 self.log(f"Joined {room_name}")
                 if room_id: self.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
             
-            # 4. User Lists
+            # 4. Handling User Lists (KICK FIX)
             elif handler in ["activeoccupants", "userslist"] and room_name:
                 raw_users = data.get("users", [])
                 new_users = []
                 new_map = {}
+                
                 for u in raw_users:
+                    # Yahan bhi Extractor logic use kar rahe hain manual
                     uname = u.get('username')
-                    uid = str(u.get('userid') or u.get('id') or u.get('userId'))
+                    uid = str(u.get('userid') or u.get('userId') or u.get('id'))
+                    
                     if uname and uid:
                         new_users.append(uname)
-                        new_map[uname.lower()] = uid
+                        new_map[uname.lower()] = uid # ID Save ho gayi
+                
                 with self.lock:
                     self.room_details[room_name]['users'] = new_users
                     self.room_details[room_name]['id_map'] = new_map
                 self.log(f"Updated list for {room_name}: {len(new_users)} users mapped.")
 
-            # 5. User Join
+            # 5. User Join (Update Map)
             elif handler == "userjoin" and room_name:
                 u = data.get("username")
-                uid = str(data.get("userid") or data.get("id") or data.get("userId"))
+                uid = data.get("userid") # Upar Extractor se mil gaya hoga
                 with self.lock:
                     if u not in self.room_details[room_name]['users']:
                         self.room_details[room_name]['users'].append(u)
@@ -194,6 +197,10 @@ class HowdiesBot:
 
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
+
+    # ==========================================
+    # ---  REQUIRED FUNCTIONS  ---
+    # ==========================================
 
     def upload_to_server(self, image_bytes, file_type='png'):
         import io
