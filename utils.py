@@ -87,10 +87,16 @@ class HighPerformanceUtils:
         return None
 
     def upload_image_fast(self, image_bytes, token, user_id, file_type='png'):
-        """Super Fast Upload using Session"""
+        """High-Performance Upload using Session Pool"""
         import io
+        
+        # 🔥 CRITICAL SAFETY CHECK
+        if image_bytes is None:
+            print("[Utils] Error: Upload cancelled (Image data is None).")
+            return None
+
         try:
-            # Convert PIL Image to Bytes if needed
+            # Convert PIL to Bytes if needed
             if not isinstance(image_bytes, (bytes, bytearray)):
                 img_byte_arr = io.BytesIO()
                 image_bytes.save(img_byte_arr, format=file_type.upper())
@@ -102,6 +108,7 @@ class HighPerformanceUtils:
             files = {'file': (f'fast_up.{file_type}', image_bytes, mime)}
             data = {'token': token, 'uploadType': 'image', 'UserID': user_id}
             
+            # Session ka use karke Fast Upload
             resp = self.session.post(url, files=files, data=data, timeout=20)
             
             if resp.status_code == 200:
@@ -219,7 +226,12 @@ utils_instance = HighPerformanceUtils()
 # 1. Uploading
 def upload(bot, image_data, ext='png'):
     """Image Upload karke URL deta hai"""
-    return utils_instance.upload_image_fast(image_data, bot.token, bot.user_id, ext)
+    return utils_instance.upload_image_fast(
+        image_data, 
+        bot.token, 
+        bot.user_id, 
+        ext
+    )
 
 # 2. Asset Fetching
 def get_image(url): return utils_instance.download_image(url)
