@@ -10,7 +10,7 @@ try: import utils
 except ImportError: print("[Slap] Error: utils.py not found!")
 
 def setup(bot):
-    print("[Fun] Animated Slap Engine Loaded.")
+    print("[Fun] Slap Engine (Async) Loaded.")
 
 # ==========================================
 # 📦 ASSETS
@@ -38,113 +38,72 @@ GIFS = {
 # ==========================================
 
 def create_slap_gif(gif_url, text):
-    """
-    Downloads a GIF, adds a background and text to EVERY frame,
-    and re-assembles it.
-    """
     try:
-        # 1. Download Raw GIF
-        response = requests.get(gif_url)
+        # Download
+        response = requests.get(gif_url, timeout=10)
         original_gif = Image.open(BytesIO(response.content))
         
         frames = []
+        W, H = 400, 350 # Thoda size kam kiya taaki FAST ho (Upload fail na ho)
+        gif_w, gif_h = 350, 250 
         
-        # Canvas Settings
-        W, H = 500, 450
-        gif_w, gif_h = 450, 300 # Resize GIF to this
-        
-        # Pre-generate Background (Optimization: Ek hi baar banao)
-        # Gradient Background
+        # Base Background (Ek hi baar banayenge memory bachane ke liye)
         bg_base = utils.get_gradient(W, H, "#232526", "#414345")
-        
-        # Add Border Frame to BG
         d = ImageDraw.Draw(bg_base)
-        d.rectangle([20, 20, 480, 330], outline="white", width=3) # Frame for GIF
+        d.rectangle([25, 25, 375, 275], outline="white", width=2)
         
-        # Write Text on BG (Optimization: Text har frame pe likhne se acha background me likh do)
-        # Shadow
-        utils.write_text(d, (W//2+2, 380+2), text, size=30, align="center", col="black")
-        # Main Text
-        utils.write_text(d, (W//2, 380), text, size=30, align="center", col="#FFD700") # Gold Text
+        # Text
+        utils.write_text(d, (W//2, 310), text, size=22, align="center", col="#FFD700", shadow=True)
         
-        # 2. Process Each Frame
+        # Process Frames (Limit to 15 frames max to prevent Timeout/Crash)
+        i = 0
         for frame in ImageSequence.Iterator(original_gif):
-            # Convert frame to RGBA to handle transparency/colors correctly
+            i += 1
+            if i > 20: break # Safety limit
+            
             frame = frame.convert("RGBA")
+            frame = frame.resize((gif_w, gif_h), Image.Resampling.NEAREST) # Nearest is faster
             
-            # Resize frame to fit our box
-            frame = frame.resize((gif_w, gif_h), Image.Resampling.LANCZOS)
-            
-            # Create a copy of our pre-made background
             new_frame = bg_base.copy()
-            
-            # Paste the GIF frame in the center
-            # (25, 25) is the margin calculate based on (500-450)/2
             new_frame.paste(frame, (25, 25), frame)
-            
-            # We don't need to write text again, it's already on bg_base!
-            
             frames.append(new_frame)
 
-        # 3. Save as New GIF
+        if not frames: return None
+
+        # Optimization: Quality kam aur Speed zyada
         output = BytesIO()
         frames[0].save(
             output, 
             format="GIF", 
             save_all=True, 
             append_images=frames[1:], 
-            duration=original_gif.info.get('duration', 100), # Original speed
+            duration=original_gif.info.get('duration', 100),
             loop=0, 
-            disposal=2
+            disposal=2,
+            optimize=True # File size chhota karega
         )
         output.seek(0)
         return output
 
     except Exception as e:
-        print(f"GIF Error: {e}")
+        print(f"GIF Gen Error: {e}")
         return None
 
 # ==========================================
-# ⚙️ HANDLER
+# ⚙️ HANDLER (BACKGROUND THREAD)
 # ==========================================
 
-def handle_command(bot, command, room_id, user, args, data):
-    cmd = command.lower().strip()
-    
-    if cmd == "slap":
-        if not args:
-            bot.send_message(room_id, "Usage: `!slap <m/f> @user`")
-            return True
-            
-        # Parse Arguments
-        style = "m" # Default
-        target = args[0]
-        
-        if args[0].lower() in ["m", "f", "x"]:
-            style = args[0].lower()
-            if len(args) > 1: target = args[1]
-        
-        target = target.replace("@", "")
-        
-        # Bot Revenge Logic
-        my_name = bot.user_data.get('username', 'Bot')
-        if target.lower() == my_name.lower():
-            target = user # Target wapas user ban gaya
-            style = "x"   # Extreme mode
-            text = f"🤖 Bot SLAPPED @{user}!"
-        else:
-            text = f"👋 @{user} SLAPPED @{target}!"
-
-        bot.send_message(room_id, f"🎥 **Recording Action...** (Processing GIF)")
-        
-        # Select GIF
+def process_slap_task(bot, room_id, style, text):
+    """Ye function Background me chalega"""
+    try:
+        # 1. Select GIF
         gif_url = random.choice(GIFS.get(style, GIFS["m"]))
         
-        # Create Meme GIF
+        # 2. Generate (Heavy Task)
         final_gif = create_slap_gif(gif_url, text)
         
         if final_gif:
-            # Upload (Using 'gif' extension is important)
+            # 3. Upload
             link = utils.upload(bot, final_gif, ext="gif")
             if link:
                 bot.send_json({
@@ -155,10 +114,43 @@ def handle_command(bot, command, room_id, user, args, data):
                     "text": "Slap"
                 })
             else:
-                bot.send_message(room_id, "❌ Upload Failed.")
+                bot.send_message(room_id, "❌ Slap miss ho gaya (Upload Failed).")
         else:
-            bot.send_message(room_id, "❌ GIF Engine Error.")
+            bot.send_message(room_id, "❌ Camera kharab ho gaya (GIF Error).")
             
+    except Exception as e:
+        print(f"Background Task Error: {e}")
+
+def handle_command(bot, command, room_id, user, args, data):
+    cmd = command.lower().strip()
+    
+    if cmd == "slap":
+        if not args:
+            bot.send_message(room_id, "Usage: `!slap <m/f> @user`")
+            return True
+            
+        style = "m"
+        target = args[0]
+        
+        if args[0].lower() in ["m", "f", "x"]:
+            style = args[0].lower()
+            if len(args) > 1: target = args[1]
+        
+        target = target.replace("@", "")
+        
+        # Revenge Logic
+        my_name = bot.user_data.get('username', 'Bot')
+        if target.lower() == my_name.lower():
+            target = user; style = "x"; text = f"🤖 Bot ne @{user} ko dhoya!"
+        else:
+            text = f"👋 @{user} ne @{target} ko mara!"
+
+        bot.send_message(room_id, f"🎥 **Recording Action...**")
+        
+        # 🔥 CRITICAL FIX: Run in Background
+        # Ye bot ko block hone se rokega
+        utils.run_in_bg(process_slap_task, bot, room_id, style, text)
+        
         return True
 
     return False
