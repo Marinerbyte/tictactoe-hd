@@ -1,7 +1,7 @@
 import time
 import random
 import threading
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 # --- IMPORTS ---
 try: import utils
@@ -13,164 +13,91 @@ except: print("[Ludo] DB Error")
 # --- GLOBAL VARIABLES ---
 games = {}
 game_lock = threading.Lock()
+BOT_INSTANCE = None # To send messages from background thread
 
-# --- HIGH QUALITY CARTOON ASSETS ---
-# Humne specifically aise icons chune hain jo "Player" jaise dikhein
+# --- CONSTANTS ---
 THEMES = {
-    'R': {
-        'name': 'Red', 
-        'hex': '#FF3333', 
-        'dark': '#CC0000',
-        'icon': "https://img.icons8.com/3d-fluency/94/iron-man.png" # Red Hero
-    },
-    'G': {
-        'name': 'Green', 
-        'hex': '#33FF33', 
-        'dark': '#00CC00',
-        'icon': "https://img.icons8.com/3d-fluency/94/hulk.png" # Green Hero
-    },
-    'Y': {
-        'name': 'Yellow', 
-        'hex': '#FFD700', 
-        'dark': '#CCAC00',
-        'icon': "https://img.icons8.com/3d-fluency/94/pikachu-pokemon.png" # Yellow Hero
-    },
-    'B': {
-        'name': 'Blue', 
-        'hex': '#3388FF', 
-        'dark': '#0044CC',
-        'icon': "https://img.icons8.com/3d-fluency/94/captain-america.png" # Blue Hero
-    }
+    'R': {'name': 'Red', 'hex': '#FF3333', 'icon': "https://img.icons8.com/3d-fluency/94/iron-man.png"},
+    'G': {'name': 'Green', 'hex': '#33FF33', 'icon': "https://img.icons8.com/3d-fluency/94/hulk.png"},
+    'Y': {'name': 'Yellow', 'hex': '#FFD700', 'icon': "https://img.icons8.com/3d-fluency/94/pikachu-pokemon.png"},
+    'B': {'name': 'Blue', 'hex': '#3388FF', 'icon': "https://img.icons8.com/3d-fluency/94/captain-america.png"}
 }
 
-# --- COORDINATE MAPPING (15x15 GRID) ---
-# Grid Size: 15x15. 
-# Coordinate System: (Col, Row) 0-14.
-# Each cell will be drawn as a Box.
+def setup(bot):
+    global BOT_INSTANCE
+    BOT_INSTANCE = bot
+    # Start Cleanup Thread
+    threading.Thread(target=game_cleanup_loop, daemon=True).start()
+    print("[Ludo] Pro Edition (Auto-Mod) Loaded.")
+
+# ==========================================
+# 🕒 AUTOMATIC CLEANUP & TIMEOUT SYSTEM
+# ==========================================
+
+def game_cleanup_loop():
+    while True:
+        time.sleep(5) # Check every 5 seconds
+        if not games: continue
+        
+        now = time.time()
+        to_delete = []
+        
+        with game_lock:
+            for rid, g in games.items():
+                if g.state == 'lobby':
+                    # Lobby Timeout (2 mins)
+                    if now - g.created_at > 120:
+                        if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, "⏳ **Lobby Expired.**")
+                        to_delete.append(rid)
+                    continue
+
+                # 1. Game Inactivity (90s)
+                if now - g.last_interaction > 90:
+                    if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, "💤 **Game Dead!** Closed due to inactivity.")
+                    # Host Penalty logic can be added here
+                    to_delete.append(rid)
+                    continue
+                
+                # 2. Player Timeout (45s)
+                curr_uid, curr_p = g.get_current_player()
+                if curr_uid and (now - g.turn_start_time > 45):
+                    # KICK PLAYER
+                    p_name = curr_p['name']
+                    if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"⏱️ **@{p_name}** slept! Eliminated (-200 Coins).")
+                    
+                    # Penalty
+                    add_game_result(curr_uid, p_name, "ludo_penalty", -200, False)
+                    
+                    # Remove from turn list
+                    g.turn_list.remove(curr_uid)
+                    
+                    # Check if game ends (Only 1 player left)
+                    if len(g.turn_list) < 2:
+                        winner_uid = g.turn_list[0]
+                        winner_name = g.players[winner_uid]['name']
+                        reward = g.bet * len(g.players)
+                        add_game_result(winner_uid, winner_name, "ludo", reward, True)
+                        if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"🏆 **@{winner_name} Wins** by default!")
+                        to_delete.append(rid)
+                    else:
+                        # Next Turn
+                        if g.turn_index >= len(g.turn_list): g.turn_index = 0
+                        g.turn_start_time = time.time()
+                        g.last_interaction = time.time()
+                        
+                        # Notify next player
+                        n_uid, n_p = g.get_current_player()
+                        if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"👉 **@{n_p['name']}'s** Turn")
+
+        for rid in to_delete:
+            if rid in games: del games[rid]
+
+# ==========================================
+# 🎨 GRAPHICS ENGINE (AVATAR SUPPORT)
+# ==========================================
 
 def get_pixel_coords(step, color, cell_size, margin_x, margin_y):
-    """
-    Standard Ludo Path Logic mapped to 15x15 Grid.
-    Returns Center (x, y) for the token.
-    """
-    # 0. Define the Visual Path (The Snake)
-    # This path starts from Red's Start (Bottom-Left) and goes clockwise
-    # Sequence of (Col, Row)
-    path = [
-        (1,13), (2,13), (3,13), (4,13), (5,13), # Red Straight
-        (6,12), (6,11), (6,10), (6,9), (6,8),   # Up towards Green
-        (6,6), # <--- Turning Point (Special handling)
-        # Actually standard ludo path is tricky. Let's use Quadrant Logic.
-        # Quadrant 1 (Red): (0-5) -> (6-10) -> (11)
-        # It's easier to hardcode the 52 steps loop.
-    ]
-    
-    # Let's use a Lookup Table for the 52 outer cells (0-indexed)
-    # Starting from Red Start Position: (1, 13)
-    loop_52 = [
-        (1,13), (2,13), (3,13), (4,13), (5,13), (6,12), (6,11), (6,10), (6,9), (6,8), (6,7), (5,7), (4,7), (3,7), (2,7), (1,7), # 0-15
-        (0,7), (0,8), # Turn
-        (1,8), (2,8), (3,8), (4,8), (5,8), (6,8), (7,9), (7,10), (7,11), (7,12), (7,13), # ... Wait, this manual mapping is prone to error.
-    ]
-    
-    # CORRECT LOGIC:
-    # 0-51 Steps are on the outer track.
-    # Red Starts at index 0. Green at 13. Yellow at 26. Blue at 39.
-    
-    # Let's map coordinates purely based on "Step count from Red Start"
-    # Red Start (1, 13) -> Right -> Up -> Right ...
-    
-    # Coordinate Map (Col, Row) for 0 to 51
-    # 0-4: (1,13) to (5,13)
-    # 5-10: (6,12) to (6,7)
-    # 11: (5,7) ?? No, standard board: (6,6) is center. (5,6) is stop?
-    # Let's trust the Standard Grid:
-    # 15x15 Grid.
-    
-    # RED ARM (Bottom): Rows 9-14, Cols 6-8.
-    # GREEN ARM (Top): Rows 0-5, Cols 6-8.
-    # BLUE ARM (Right): Rows 6-8, Cols 9-14.
-    # YELLOW ARM (Left): Rows 6-8, Cols 0-5.
-    # NOTE: Colors might be swapped in standard boards, but let's stick to this.
-    
-    # We will use relative logic.
-    # Home Run depends on color.
-    
-    c, r = 0, 0
-    
-    # 1. ADJUST STEP BASED ON COLOR START
-    # Everyone walks the same path, just starts at different offsets.
-    # Red=0, Green=13, Yellow=26, Blue=39
-    offset = 0
-    if color == 'G': offset = 13
-    elif color == 'Y': offset = 26
-    elif color == 'B': offset = 39
-    
-    virtual_step = (step + offset) % 52
-    
-    # 2. MAP 0-51 TO GRID (Col, Row)
-    # This is the "Snake"
-    if 0 <= virtual_step <= 4:     c, r = 1 + virtual_step, 13           # Red Straight
-    elif 5 <= virtual_step <= 10:  c, r = 6, 12 - (virtual_step-5)       # Red Up
-    elif 11 == virtual_step:       c, r = 6, 6                           # Turn (Towards Green) -> Actually 6,6 is unsafe usually? Let's say (5,6) 
-    # WAIT, grid is 15x15. Center is (7,7).
-    # Let's restart mapping for 15x15 Center=(7,7).
-    
-    # BOTTOM ARM (Red Start): (6, 13) -> (6, 9)
-    # 0: (1, 13), 1: (2, 13)... 4: (5, 13) -> 5: (6, 12)... 10: (6, 7) -> 11: (5, 7) ???
-    
-    # Okay, simple static map for the 52 steps is safest.
-    # 0-5: Bottom Left Horizontal
-    # 6-11: Bottom Left Vertical
-    # 12: End of Bottom Left
-    
-    path_x = [1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 5, 4, 3, 2, 1, 0, 0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 7, 7, 8, 9, 10, 11, 12, 13, 13, 12, 11, 10, 9, 8, 8, 8, 8, 8, 8, 9, 10, 11, 12, 13, 14]
-    # This is getting messy. Let's use specific segments.
-    
-    # Final simplified logic for Grid (Col, Row)
-    if step >= 51: # HOME RUN
-        if color == 'R': c, r = 1 + (step-51), 7      # Red goes Right into center
-        elif color == 'G': c, r = 7, 1 + (step-51)    # Green goes Down ? No.
-        # Visual Check:
-        # Red Start (1,13) -> Goes right? No usually Red goes Up.
-        # Let's fix the board layout first in `draw_board` and match path to it.
-        pass
-
-    # HARDCODED 52-STEP PATH (Standard Ludo)
-    # 0 is Red Start.
-    raw_coords = [
-        (1,13),(2,13),(3,13),(4,13),(5,13), # Bottom Left > Right
-        (6,12),(6,11),(6,10),(6,9),(6,8),   # Bottom Middle > Up
-        (6,7),                              # Turning into Center? No, pass center
-        (5,7),(4,7),(3,7),(2,7),(1,7),(0,7), # Left Arm > Left
-        (0,6),(0,5),                        # Turn Up
-        (1,6),(2,6),(3,6),(4,6),(5,6),(6,6), # Left Arm > Right (Typo here, standard ludo is complex)
-    ]
-    
-    # --- ULTRA SIMPLE VISUAL MAPPING (Based on Quadrants) ---
-    # We will assume a specific layout and force tokens there.
-    # Layout:
-    # R (Bottom Left), G (Top Left), Y (Top Right), B (Bottom Right)
-    
-    # If Step < 51: Use generic path walker.
-    # If Step >= 51: Move towards (7,7) based on color.
-    
-    # Let's use a logic that works:
-    # Define corners.
-    
-    if step == -1: # Home Base
-        if color == 'R': return margin_x + 2.5*cell_size, margin_y + 11.5*cell_size
-        if color == 'G': return margin_x + 2.5*cell_size, margin_y + 2.5*cell_size
-        if color == 'Y': return margin_x + 11.5*cell_size, margin_y + 2.5*cell_size
-        if color == 'B': return margin_x + 11.5*cell_size, margin_y + 11.5*cell_size
-        
-    # --- FALLBACK TO GENERIC GRID CALCULATOR ---
-    # We simulate walking the grid.
-    # Start (1, 13) facing Right.
-    # Walk 5, Turn Up. Walk 5, Turn Left. Walk 2, Turn Down?
-    # This is prone to bugs without visualization.
-    
-    # SOLUTION: I have mapped the exact 52 coordinates for you.
+    # Same simplified mapping as before for 15x15 grid
     # 0-indexed from Red Start (1, 13)
     COORDS_52 = [
         (1,13),(2,13),(3,13),(4,13),(5,13), (6,12),(6,11),(6,10),(6,9),(6,8), (6,7), # 0-10
@@ -181,228 +108,196 @@ def get_pixel_coords(step, color, cell_size, margin_x, margin_y):
         (14,7),(14,8), # 44-45 (Turn BottomRight)
         (13,8),(12,8),(11,8),(10,8),(9,8), (8,8), (8,9),(8,10),(8,11),(8,12),(8,13) # 46-51
     ]
-    # NOTE: The above map is an approximation of a specific board type. 
-    # With 15x15 grid, "Center" strip is usually column 7.
     
+    offset = 0
+    if color == 'G': offset = 13
+    elif color == 'Y': offset = 26
+    elif color == 'B': offset = 39
+    
+    if step == -1: # Home Base
+        if color == 'R': return margin_x + 2.5*cell_size, margin_y + 11.5*cell_size
+        if color == 'G': return margin_x + 2.5*cell_size, margin_y + 2.5*cell_size
+        if color == 'Y': return margin_x + 11.5*cell_size, margin_y + 2.5*cell_size
+        if color == 'B': return margin_x + 11.5*cell_size, margin_y + 11.5*cell_size
+        
     if step < 51:
         idx = (step + offset) % 52
-        # Use a safe lookup if list is short
         c, r = COORDS_52[idx] if idx < len(COORDS_52) else (7,7)
     else:
-        # Winning Path (Home Run)
-        # Target is (7,7)
+        # Home Run
         dist = step - 51
-        if color == 'R': c, r = 7, 13 - dist # Up middle
-        elif color == 'G': c, r = 1 + dist, 7 # Right middle
-        elif color == 'Y': c, r = 7, 1 + dist # Down middle
-        elif color == 'B': c, r = 13 - dist, 7 # Left middle
+        if color == 'R': c, r = 7, 13 - dist
+        elif color == 'G': c, r = 1 + dist, 7
+        elif color == 'Y': c, r = 7, 1 + dist
+        elif color == 'B': c, r = 13 - dist, 7
+        if step >= 56: c, r = 7, 7 # Center
         
-    # Convert Grid (Col, Row) to Pixels
     x = margin_x + (c * cell_size) + (cell_size // 2)
     y = margin_y + (r * cell_size) + (cell_size // 2)
     return x, y
 
-# ==========================================
-# 🎨 GRAPHICS ENGINE (REALISTIC BOXES)
-# ==========================================
-
 def draw_ludo_board_hd(players, dice_val=None, rolling=False):
-    # Setup Canvas
-    SZ = 50 # Bigger cells
-    W, H = SZ * 15 + 40, SZ * 15 + 40 # 15 cols + margins
-    bg_color = "#F0F0F0" # Light Grey table
-    
-    img = utils.create_canvas(W, H, bg_color)
+    SZ = 50; W, H = SZ * 15 + 40, SZ * 15 + 40
+    img = utils.create_canvas(W, H, "#F5F5F5")
     d = ImageDraw.Draw(img)
-    
-    # Margins
     mx, my = 20, 20
     
-    # 1. DRAW BASE QUADRANTS (The Big Homes)
-    # Top-Left (Green)
-    d.rectangle([mx, my, mx+6*SZ, my+6*SZ], fill=THEMES['G']['hex'], outline="black", width=2)
-    d.rectangle([mx+SZ, my+SZ, mx+5*SZ, my+5*SZ], fill="white", outline="black", width=1)
-    
-    # Top-Right (Yellow)
-    d.rectangle([mx+9*SZ, my, mx+15*SZ, my+6*SZ], fill=THEMES['Y']['hex'], outline="black", width=2)
-    d.rectangle([mx+10*SZ, my+SZ, mx+14*SZ, my+5*SZ], fill="white", outline="black", width=1)
-    
-    # Bottom-Left (Red)
-    d.rectangle([mx, my+9*SZ, mx+6*SZ, my+15*SZ], fill=THEMES['R']['hex'], outline="black", width=2)
-    d.rectangle([mx+SZ, my+10*SZ, mx+5*SZ, my+14*SZ], fill="white", outline="black", width=1)
-    
-    # Bottom-Right (Blue)
-    d.rectangle([mx+9*SZ, my+9*SZ, mx+15*SZ, my+15*SZ], fill=THEMES['B']['hex'], outline="black", width=2)
-    d.rectangle([mx+10*SZ, my+10*SZ, mx+14*SZ, my+14*SZ], fill="white", outline="black", width=1)
+    # 1. DRAW BOARD BASE (Simplified for brevity, same as before)
+    # Homes
+    d.rectangle([mx, my, mx+6*SZ, my+6*SZ], fill=THEMES['G']['hex'], outline="black", width=2) # Green
+    d.rectangle([mx+9*SZ, my, mx+15*SZ, my+6*SZ], fill=THEMES['Y']['hex'], outline="black", width=2) # Yellow
+    d.rectangle([mx, my+9*SZ, mx+6*SZ, my+15*SZ], fill=THEMES['R']['hex'], outline="black", width=2) # Red
+    d.rectangle([mx+9*SZ, my+9*SZ, mx+15*SZ, my+15*SZ], fill=THEMES['B']['hex'], outline="black", width=2) # Blue
+    # Inner Whites
+    d.rectangle([mx+SZ, my+SZ, mx+5*SZ, my+5*SZ], fill="white", outline="black")
+    d.rectangle([mx+10*SZ, my+SZ, mx+14*SZ, my+5*SZ], fill="white", outline="black")
+    d.rectangle([mx+SZ, my+10*SZ, mx+5*SZ, my+14*SZ], fill="white", outline="black")
+    d.rectangle([mx+10*SZ, my+10*SZ, mx+14*SZ, my+14*SZ], fill="white", outline="black")
 
-    # 2. DRAW THE GRID BOXES (Tracks)
-    # We iterate all cells that are part of the track and draw a box
-    # Horizontal Track (Row 6, 7, 8)
-    for r in range(6, 9):
+    # Tracks
+    for r in range(15):
         for c in range(15):
-            x, y = mx + c*SZ, my + r*SZ
+            is_track = False
             fill = "white"
-            # Colored Home Runs
-            if r == 7:
-                if 1 <= c <= 5: fill = THEMES['G']['hex'] # Green Home
-                if 9 <= c <= 13: fill = THEMES['B']['hex'] # Blue Home (Actually Blue is right usually?)
-            d.rectangle([x, y, x+SZ, y+SZ], fill=fill, outline="black", width=1)
-
-    # Vertical Track (Col 6, 7, 8)
-    for c in range(6, 9):
-        for r in range(15):
-            # Skip Center Overlap
-            if 6 <= r <= 8: continue 
-            x, y = mx + c*SZ, my + r*SZ
-            fill = "white"
-            # Colored Home Runs
-            if c == 7:
-                if 1 <= r <= 5: fill = THEMES['Y']['hex'] # Yellow Home
-                if 9 <= r <= 13: fill = THEMES['R']['hex'] # Red Home
-            d.rectangle([x, y, x+SZ, y+SZ], fill=fill, outline="black", width=1)
-
-    # 3. DRAW CENTER (WIN ZONE)
+            if (6 <= r <= 8) or (6 <= c <= 8): is_track = True
+            if (6 <= r <= 8) and (6 <= c <= 8): is_track = False # Center exclusion for now
+            
+            if is_track:
+                x, y = mx + c*SZ, my + r*SZ
+                # Colored Paths
+                if r==7 and 1<=c<=5: fill=THEMES['G']['hex']
+                if r==7 and 9<=c<=13: fill=THEMES['B']['hex']
+                if c==7 and 1<=r<=5: fill=THEMES['Y']['hex']
+                if c==7 and 9<=r<=13: fill=THEMES['R']['hex']
+                d.rectangle([x, y, x+SZ, y+SZ], fill=fill, outline="black", width=1)
+                
+    # Center
     cx, cy = mx + 7.5*SZ, my + 7.5*SZ
     d.polygon([(mx+6*SZ, my+6*SZ), (mx+9*SZ, my+6*SZ), (cx, cy)], fill=THEMES['Y']['hex'], outline="black")
     d.polygon([(mx+9*SZ, my+6*SZ), (mx+9*SZ, my+9*SZ), (cx, cy)], fill=THEMES['B']['hex'], outline="black")
     d.polygon([(mx+9*SZ, my+9*SZ), (mx+6*SZ, my+9*SZ), (cx, cy)], fill=THEMES['R']['hex'], outline="black")
     d.polygon([(mx+6*SZ, my+9*SZ), (mx+6*SZ, my+6*SZ), (cx, cy)], fill=THEMES['G']['hex'], outline="black")
 
-    # 4. DRAW TOKENS (CARTOON + NAMES)
+    # 2. DRAW TOKENS (WITH AVATAR)
     for uid, p in players.items():
         step = p['step']
         color = p['color']
-        
-        # Get Pixel Coords
         px, py = get_pixel_coords(step, color, SZ, mx, my)
         
-        # Draw Shadow
-        d.ellipse([px-15, py+10, px+15, py+18], fill=(0,0,0,50))
+        # Shadow
+        d.ellipse([px-18, py+12, px+18, py+20], fill=(0,0,0,50))
         
-        # Draw Cartoon Icon
-        icon_url = THEMES[color]['icon']
-        icon_img = utils.get_image(icon_url)
+        # Priority: Avatar > Cartoon
+        av_img = None
+        if p.get('avatar_url'):
+            av_img = utils.get_circle_avatar(p['avatar_url'], size=44)
         
-        if icon_img:
-            # Resize nicely
-            icon_img = icon_img.resize((40, 40))
-            # Center it
-            img.paste(icon_img, (int(px-20), int(py-20)), icon_img)
+        if av_img:
+            # Add Colored Border to Avatar
+            border_col = THEMES[color]['hex']
+            bg = Image.new('RGBA', (48, 48), (0,0,0,0))
+            bd = ImageDraw.Draw(bg)
+            bd.ellipse([0, 0, 48, 48], fill=border_col)
+            bg.paste(av_img, (2, 2), av_img)
+            img.paste(bg, (int(px-24), int(py-24)), bg)
         else:
-            # Fallback Circle
-            d.ellipse([px-15, py-15, px+15, py+15], fill=THEMES[color]['hex'], outline="black", width=2)
-            
-        # Draw Name Tag (Bubble)
-        name_txt = p['name'][:5] # Max 5 chars
-        # Bubble Box
-        bx, by = px, py - 35
-        d.rounded_rectangle([bx-25, by-10, bx+25, by+10], radius=5, fill="white", outline="black", width=1)
-        utils.write_text(d, (bx, by), name_txt, size=12, align="center", col="black", shadow=False)
+            # Fallback Cartoon
+            icon_url = THEMES[color]['icon']
+            icon_img = utils.get_image(icon_url)
+            if icon_img:
+                icon_img = icon_img.resize((44, 44))
+                img.paste(icon_img, (int(px-22), int(py-22)), icon_img)
+            else:
+                d.ellipse([px-20, py-20, px+20, py+20], fill=THEMES[color]['hex'], outline="black", width=2)
+                
+        # Name Tag Bubble
+        name_txt = p['name'][:6]
+        bx, by = px, py - 38
+        d.rounded_rectangle([bx-30, by-12, bx+30, by+8], radius=6, fill="white", outline="black", width=1)
+        utils.write_text(d, (bx, by-2), name_txt, size=13, align="center", col="black", shadow=False)
 
-    # 5. DICE OVERLAY
+    # 3. DICE OVERLAY
     if rolling:
-        # Blurred Overlay
-        overlay = Image.new('RGBA', (W, H), (0,0,0,100))
-        img.paste(overlay, (0,0), overlay)
+        ov = Image.new('RGBA', (W, H), (0,0,0,80))
+        img.paste(ov, (0,0), ov)
         utils.write_text(d, (W//2, H//2), "🎲 ROLLING...", size=60, align="center", col="white", shadow=True)
     elif dice_val:
-        # Show Dice Result nicely in corner
-        # Draw a fancy card
-        d.rounded_rectangle([W//2-50, H//2-50, W//2+50, H//2+50], radius=15, fill="white", outline="#FFD700", width=4)
-        
+        # Result Card
+        d.rounded_rectangle([W//2-40, H//2-40, W//2+40, H//2+40], radius=10, fill="white", outline="#FFD700", width=4)
         dice_url = f"https://img.icons8.com/3d-fluency/94/{dice_val}-circle.png"
-        dice_img = utils.get_image(dice_url)
-        if dice_img:
-            img.paste(dice_img, (W//2-40, H//2-40), dice_img)
+        dimg = utils.get_image(dice_url)
+        if dimg:
+            dimg = dimg.resize((70, 70))
+            img.paste(dimg, (int(W//2-35), int(H//2-35)), dimg)
         else:
-            utils.write_text(d, (W//2, H//2), str(dice_val), size=50, align="center", col="black")
+            utils.write_text(d, (W//2, H//2), str(dice_val), size=40, align="center", col="black")
 
     return img
 
 # ==========================================
-# ⚙️ GAME LOGIC
+# ⚙️ LOGIC
 # ==========================================
 
 class LudoGame:
-    def __init__(self, room_id, bet):
+    def __init__(self, room_id, bet, creator_id):
         self.room_id = room_id
         self.bet = bet
+        self.creator_id = creator_id
         self.players = {}
         self.state = 'lobby'
-        self.colors = ['R', 'G', 'Y', 'B'] # Available colors
-        self.turn_list = [] # Active uids in order
+        self.colors = ['R', 'G', 'Y', 'B']
+        self.turn_list = []
         self.turn_index = 0
+        
+        # Timestamps for Auto-Mod
+        self.created_at = time.time()
+        self.last_interaction = time.time()
+        self.turn_start_time = time.time()
 
-    def add_player(self, uid, name):
+    def add_player(self, uid, name, avatar_url=None):
         if not self.colors: return False
         col = self.colors.pop(0)
         self.players[str(uid)] = {
-            'name': name,
-            'color': col,
-            'step': -1 # -1 is Home Base
+            'name': name, 'color': col, 'step': -1, 'avatar_url': avatar_url
         }
+        self.last_interaction = time.time()
         return True
 
     def get_current_player(self):
-        if not self.turn_list: return None
+        if not self.turn_list: return None, None
         uid = self.turn_list[self.turn_index]
         return uid, self.players[uid]
-
-    def next_turn(self):
-        self.turn_index = (self.turn_index + 1) % len(self.turn_list)
-
-    def move_token(self, uid, dice):
-        p = self.players[str(uid)]
-        
-        # Start Condition (Sprint Mode: Start on 1 or 6? Let's say any dice moves from base for speed)
-        if p['step'] == -1:
-            p['step'] = 0 # Enter board
-            return False, "Entered Board!"
-            
-        new_step = p['step'] + dice
-        
-        # Win Condition
-        if new_step >= 56: # Reached Center
-            p['step'] = 57
-            return True, "🏆 REACHED HOME!"
-            
-        # Cutting Logic
-        msg = ""
-        # Check if landing on opponent
-        # Note: Need grid collision logic here. 
-        # For simplicity in Sprint Mode: If exact step match on main track (<51), Kill.
-        
-        if new_step < 51:
-            for other_uid, other_p in self.players.items():
-                if other_uid != str(uid) and other_p['step'] == new_step:
-                    # KILL!
-                    other_p['step'] = -1
-                    msg = f"\n⚔️ **CRUSHED {other_p['name']}!**"
-        
-        p['step'] = new_step
-        return False, msg
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     uid = data.get('userid', user)
+    
+    # 🛑 BOT SELF-JOIN PREVENTION
+    if str(uid) == str(bot.user_id): return False
+    
     global games
     
-    # 1. LUDO CREATE
+    # 1. CREATE
     if cmd == "ludo":
         bet = 0
         if args and args[0].isdigit(): bet = int(args[0])
         
         with game_lock:
             if room_id in games: return True
-            g = LudoGame(room_id, bet)
-            g.add_player(uid, user)
+            g = LudoGame(room_id, bet, uid)
+            
+            # Fetch Avatar from Data
+            av_file = data.get("avatar")
+            av_url = f"https://cdn.howdies.app/avatar?image={av_file}" if av_file else None
+            
+            g.add_player(uid, user, av_url)
             if bet > 0: add_game_result(uid, user, "ludo", -bet, False)
             games[room_id] = g
             
         img = draw_ludo_board_hd(g.players)
         link = utils.upload(bot, img)
         bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Lobby"})
-        bot.send_message(room_id, f"🎲 **Ludo HD Created!** Bet: {bet}\nType `!join`")
+        bot.send_message(room_id, f"🎲 **Ludo Lobby!** Bet: {bet}\nType `!join`")
         return True
 
     # 2. JOIN
@@ -410,10 +305,14 @@ def handle_command(bot, command, room_id, user, args, data):
         with game_lock:
             g = games.get(room_id)
             if not g or g.state != 'lobby': return False
-            if g.add_player(uid, user):
+            if str(uid) in g.players: return True
+            
+            av_file = data.get("avatar")
+            av_url = f"https://cdn.howdies.app/avatar?image={av_file}" if av_file else None
+            
+            if g.add_player(uid, user, av_url):
                 if g.bet > 0: add_game_result(uid, user, "ludo", -g.bet, False)
                 bot.send_message(room_id, f"✅ **{user}** joined!")
-                # Update Lobby Image
                 img = draw_ludo_board_hd(g.players)
                 link = utils.upload(bot, img)
                 bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Join"})
@@ -431,7 +330,8 @@ def handle_command(bot, command, room_id, user, args, data):
                 return True
             g.state = 'playing'
             g.turn_list = list(g.players.keys())
-            bot.send_message(room_id, "🔥 **Game On!** First player type `!roll`")
+            g.turn_start_time = time.time()
+            bot.send_message(room_id, "🔥 **Game Started!**")
         return True
 
     # 4. ROLL
@@ -443,23 +343,47 @@ def handle_command(bot, command, room_id, user, args, data):
             curr_uid, curr_p = g.get_current_player()
             if str(uid) != str(curr_uid): return True
             
-            # --- ILLUSION ---
-            # Send Rolling Frame
+            # Update Timestamps
+            g.last_interaction = time.time()
+            
+            # Rolling FX
             roll_img = draw_ludo_board_hd(g.players, rolling=True)
             r_link = utils.upload(bot, roll_img)
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": r_link, "text": "Rolling..."})
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": r_link, "text": "Roll"})
             
             time.sleep(1.5)
             
             dice = random.randint(1, 6)
-            is_win, note = g.move_token(uid, dice)
             
-            # Final Frame
+            # Move Logic
+            p = g.players[str(uid)]
+            is_win = False
+            msg = ""
+            
+            if p['step'] == -1:
+                p['step'] = 0 # Start
+                msg = "Entered Board!"
+            else:
+                new_step = p['step'] + dice
+                if new_step >= 56:
+                    p['step'] = 57
+                    is_win = True
+                    msg = "🏆 REACHED HOME!"
+                elif new_step < 51:
+                    # Cut Logic
+                    for oid, op in g.players.items():
+                        if oid != str(uid) and op['step'] == new_step:
+                            op['step'] = -1
+                            msg = f"\n⚔️ **KILLED {op['name']}!**"
+                    p['step'] = new_step
+                else:
+                    p['step'] = new_step
+            
+            # Final Image
             final_img = draw_ludo_board_hd(g.players, dice_val=dice)
             f_link = utils.upload(bot, final_img)
-            
             bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": f_link, "text": f"Dice {dice}"})
-            bot.send_message(room_id, f"🎲 **{curr_p['name']}** rolled {dice}! {note}")
+            bot.send_message(room_id, f"🎲 **{curr_p['name']}** rolled {dice}! {msg}")
             
             if is_win:
                 reward = g.bet * len(g.players)
@@ -467,22 +391,28 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, f"🎉 **{user} WINS!** +{reward} Coins")
                 del games[room_id]
                 return True
-                
+            
             if dice != 6:
-                g.next_turn()
+                g.turn_index = (g.turn_index + 1) % len(g.turn_list)
             else:
                 bot.send_message(room_id, "🎉 **Bonus Turn!**")
-                
+            
+            g.turn_start_time = time.time() # Reset Turn Timer
             n_uid, n_p = g.get_current_player()
             bot.send_message(room_id, f"👉 **@{n_p['name']}'s** Turn")
             
         return True
-        
-    # 5. END
-    if cmd == "end":
+
+    # 5. STOP (!stop) - Only Creator/Admin
+    if cmd == "stop":
         with game_lock:
-            if room_id in games: del games[room_id]
-            bot.send_message(room_id, "Game Stopped.")
+            g = games.get(room_id)
+            if not g: return False
+            if str(uid) == str(g.creator_id) or str(uid) in ["ADMIN_ID_HERE"]: # Add Admin ID if needed
+                del games[room_id]
+                bot.send_message(room_id, "🛑 Game Force Stopped.")
+            else:
+                bot.send_message(room_id, "❌ Only Host can stop.")
         return True
 
     return False
