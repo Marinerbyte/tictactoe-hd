@@ -1,10 +1,11 @@
 import requests
 from utils import run_in_bg
 
-SERVER_A_URL = "https://song-1x9x.onrender.com"  # Tumhara Render server
+# Render server jahan yt-dlp backend chal raha hai
+SERVER_URL = "https://song-1x9x.onrender.com"  # apna deploy URL
 
 def setup(bot):
-    bot.log("[Plugin] Play Song plugin loaded.")
+    bot.log("[Plugin] Play Song Final plugin loaded.")
 
 def handle_command(bot, cmd, room_id, user, args, raw_data):
     if cmd.lower() != "play":
@@ -21,7 +22,8 @@ def handle_command(bot, cmd, room_id, user, args, raw_data):
 
 def fetch_and_send(bot, room_id, user, song_name):
     try:
-        resp = requests.post(f"{SERVER_A_URL}/api/search", json={"query": song_name}, timeout=15)
+        # Server se request: yt-dlp backend API
+        resp = requests.post(f"{SERVER_URL}/api/search", json={"query": song_name}, timeout=30)
         if resp.status_code != 200:
             bot.send_message(room_id, f"@{user} Error fetching song. Try again later.")
             return
@@ -31,8 +33,14 @@ def fetch_and_send(bot, room_id, user, song_name):
             bot.send_message(room_id, f"@{user} No results found for '{song_name}'.")
             return
 
-        audio_url = SERVER_A_URL + data["url"]
-        message = f"🎵 **{song_name}**\n[▶️ Play]({audio_url})"
+        audio_url = SERVER_URL + data["url"]
+        thumbnail = data.get("thumbnail") or ""
+
+        # Howdies style audio message
+        message = f"@{user} 🎵 **{song_name}**\n[▶️ Play]({audio_url})"
+        if thumbnail:
+            message += f"\n![thumbnail]({thumbnail})"
+
         bot.send_message(room_id, message)
 
     except Exception as e:
