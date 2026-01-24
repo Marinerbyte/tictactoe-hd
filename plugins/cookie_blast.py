@@ -19,9 +19,10 @@ except:
 # --- CONFIGURATION ---
 GAME_NAME = "Cookie Blast 3D"
 GRID_SIZE = 6 # 6x6
-BOX_SIZE = 140 # Big clickable areas
+BOX_SIZE = 130 # Thoda chhota kiya taaki fit aaye
 GAP = 15
-CANVAS_SIZE = 1024 # 1:1 Aspect Ratio
+CANVAS_W = 1024
+CANVAS_H = 1200 # Height badha di (Cut off fix)
 
 # COLORS
 BG_COLOR = "#1e272e" # Premium Dark Blue
@@ -40,7 +41,7 @@ def setup(bot):
     global BOT_INSTANCE
     BOT_INSTANCE = bot
     threading.Thread(target=game_monitor_loop, daemon=True).start()
-    print(f"[{GAME_NAME}] HD Edition Loaded.")
+    print(f"[{GAME_NAME}] Perfect Fit Edition Loaded.")
 
 # ==========================================
 # 🎨 ASSET & FONT HELPERS
@@ -61,7 +62,6 @@ def get_avatar(username, mood="happy"):
     try:
         # Moods: happy, sad, dizzy (for blast)
         seed = f"{username}-{random.randint(1,999)}"
-        # DiceBear 'fun-emoji' is best for expressions
         url = f"https://api.dicebear.com/9.x/fun-emoji/png?seed={seed}&backgroundColor=transparent&size=512"
         
         r = requests.get(url, timeout=3)
@@ -83,11 +83,11 @@ def centered_text(draw, x, y, text, size, color, shadow=True):
     draw.text((nx, ny), text, font=font, fill=color)
 
 # ==========================================
-# 🖼️ BOARD RENDERER (3D GRID)
+# 🖼️ BOARD RENDERER (PERFECT FIT)
 # ==========================================
 
 def render_board(game):
-    W, H = CANVAS_SIZE, CANVAS_SIZE
+    W, H = CANVAS_W, CANVAS_H
     img = utils.create_canvas(W, H, BG_COLOR)
     d = ImageDraw.Draw(img)
     
@@ -117,7 +117,7 @@ def render_board(game):
         if p['eliminated']: score_txt = "💀 OUT"
         centered_text(d, px + 60, py + 70, score_txt, 40, "#f1c40f")
 
-    # 2. THE GRID (3D Buttons)
+    # 2. THE GRID (Adjusted Y Position)
     grid_start_y = 220
     grid_w = (BOX_SIZE * 6) + (GAP * 5)
     margin_x = (W - grid_w) // 2
@@ -134,7 +134,7 @@ def render_board(game):
         
         if not is_open:
             # CLOSED STATE (3D Blue Button)
-            # Shadow
+            # Shadow (Deep)
             d.rounded_rectangle([x, y+10, x+BOX_SIZE, y+BOX_SIZE+10], radius=15, fill=BOX_SHADOW)
             # Main Face
             d.rounded_rectangle([x, y, x+BOX_SIZE, y+BOX_SIZE], radius=15, fill=BOX_CLOSED)
@@ -158,8 +158,9 @@ def render_board(game):
             centered_text(d, x + BOX_SIZE//2, y + BOX_SIZE//2 - 10, icon, 60, "black", False)
             
             # Username Tag (Small at bottom)
-            d.rounded_rectangle([x+10, y+BOX_SIZE-25, x+BOX_SIZE-10, y+BOX_SIZE+5], radius=5, fill=(0,0,0,100))
-            centered_text(d, x + BOX_SIZE//2, y + BOX_SIZE-10, opener_name[:6], 16, "white", False)
+            # Semi-transparent bar
+            d.rounded_rectangle([x+5, y+BOX_SIZE-30, x+BOX_SIZE-5, y+BOX_SIZE+5], radius=8, fill=(0,0,0,120))
+            centered_text(d, x + BOX_SIZE//2, y + BOX_SIZE-12, opener_name[:7], 18, "white", False)
 
     return img
 
@@ -187,7 +188,7 @@ def render_blast(username):
         d.line([cx, cy, x2, y2], fill="#FF0000", width=4)
 
     # 3. Avatar (Dizzy)
-    av = get_avatar(username) # Random seed will likely give a different expression, usually funny
+    av = get_avatar(username)
     if av:
         av = av.resize((300, 300))
         img.paste(av, (W//2 - 400, H//2 - 150), av) # Left side
@@ -223,7 +224,7 @@ def render_winner(username, score):
     av = get_avatar(username)
     if av:
         av = av.resize((200, 200))
-        img.paste(av, (W//2 - 100, 50), av) # Top overlapping
+        img.paste(av, (W//2 - 100, 50), av) 
         
     centered_text(d, W//2, 300, "VICTORY!", 80, "#f1c40f")
     centered_text(d, W//2, 380, f"@{username}", 50, "white")
@@ -232,7 +233,7 @@ def render_winner(username, score):
     return img
 
 # ==========================================
-# ⚙️ GAME LOGIC
+# ⚙️ GAME LOGIC (Strict Rules)
 # ==========================================
 
 class CookieGame:
@@ -253,7 +254,7 @@ class CookieGame:
     def add_player(self, uid, name):
         if len(self.players) >= 4: return False
         self.players[str(uid)] = {
-            'uid': str(uid), 'name': name, 'score': 0, 'eliminated': False
+            'uid': str(uid), 'name': name, 'score': 0, 'eliminated': False, 'strikes': 0
         }
         self.last_move_time = time.time()
         return True
@@ -284,6 +285,21 @@ class CookieGame:
                 return uid
         return None
 
+    def check_end_condition(self):
+        # 1. Only 1 player left
+        active = [p for p in self.players.values() if not p['eliminated']]
+        if len(active) <= 1: return True
+        
+        # 2. Only Bombs remaining (All cookies found)
+        # Check un-opened boxes. If all remaining are bombs (1), game over.
+        cookies_left = 0
+        for i in range(36):
+            if not self.opened[i] and self.board[i] == 0:
+                cookies_left += 1
+                
+        if cookies_left == 0: return True
+        return False
+
 # ==========================================
 # ⚡ TASKS & HANDLERS
 # ==========================================
@@ -302,7 +318,7 @@ def task_blast(bot, rid, g, user):
         link = utils.upload(bot, img)
         if link: bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "BOOM!"})
         
-        time.sleep(1.5)
+        time.sleep(2)
         
         # 2. Show Board Update
         task_update(bot, rid, g, "Board Updated")
@@ -328,23 +344,30 @@ def game_monitor_loop():
                 if g.state == 'playing' and now - g.last_move_time > 90:
                     if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, "💤 Game Closed (90s Inactivity)"); to_del.append(rid)
                     continue
-                # Player Turn Timeout (45s)
+                
                 if g.state == 'playing':
                     curr = g.turn_order[g.turn_index]
                     p = g.players[curr]
                     if not p['eliminated'] and now - g.turn_start_time > 45:
-                        p['eliminated'] = True
-                        if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"⏱️ **@{p['name']}** timed out! Eliminated.")
-                        # Check End
-                        active = [x for x in g.players.values() if not x['eliminated']]
-                        if len(active) < 2:
-                            w = active[0] if active else p # Last man standing
-                            task_win(BOT_INSTANCE, rid, w['name'], w['score'])
-                            to_del.append(rid)
-                        else:
-                            g.next_turn()
-                            nxt = g.players[g.turn_order[g.turn_index]]['name']
-                            if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"👉 **@{nxt}** Turn")
+                        # Warning logic
+                        if p['strikes'] == 0:
+                             if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"⚠️ **@{p['name']}** Hurry up! (15s left)")
+                             p['strikes'] = 1 # Warning given
+                        elif now - g.turn_start_time > 60: # Extra 15s grace
+                            p['eliminated'] = True
+                            if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"💀 **@{p['name']}** Eliminated (Timeout).")
+                            
+                            if g.check_end_condition():
+                                act = [x for x in g.players.values() if not x['eliminated']]
+                                if act:
+                                    w = max(act, key=lambda x:x['score'])
+                                    task_win(BOT_INSTANCE, rid, w['name'], w['score'])
+                                    add_game_result(w['uid'], w['name'], "cookie_blast", 500, True)
+                                to_del.append(rid)
+                            else:
+                                g.next_turn()
+                                nxt = g.players[g.turn_order[g.turn_index]]['name']
+                                if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, f"👉 **@{nxt}** Turn")
         
         for r in to_del: 
             if r in games: del games[r]
@@ -370,7 +393,7 @@ def handle_command(bot, command, room_id, user, args, data):
             if not g or g.state != 'lobby': return False
             if str(uid) in g.players: return True
             if g.add_player(uid, user): bot.send_message(room_id, f"✅ **{user}** joined!")
-            else: bot.send_message(room_id, "Full!")
+            else: bot.send_message(room_id, "Lobby Full!")
         return True
 
     if cmd == "start":
@@ -400,10 +423,11 @@ def handle_command(bot, command, room_id, user, args, data):
                 return True
                 
             g.opened[idx] = True
-            g.opened_by[idx] = user # Save Name
+            g.opened_by[idx] = user 
             is_bomb = (g.board[idx] == 1)
             p = g.players[str(uid)]
             g.last_move_time = time.time()
+            p['strikes'] = 0 # Reset timeout warning
             
             if is_bomb:
                 p['score'] = max(0, p['score'] - 1)
@@ -414,15 +438,13 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, f"🍪 **Yum!** @{user} (+1)")
                 utils.run_in_bg(task_update, bot, room_id, g, "Move")
             
-            # Check Win
-            # 1. Cookies done?
-            cookies_left = sum(1 for i, val in enumerate(g.board) if val==0 and not g.opened[i])
-            if cookies_left == 0:
+            if g.check_end_condition():
                 act = [x for x in g.players.values() if not x['eliminated']]
-                w = max(act, key=lambda x:x['score'])
-                add_game_result(w['uid'], w['name'], "cookie_blast", 500, True)
-                utils.run_in_bg(task_win, bot, room_id, w['name'], w['score'])
-                bot.send_message(room_id, f"🏆 **Game Over!** Winner: @{w['name']}")
+                if act:
+                    w = max(act, key=lambda x:x['score'])
+                    add_game_result(w['uid'], w['name'], "cookie_blast", 500, True)
+                    utils.run_in_bg(task_win, bot, room_id, w['name'], w['score'])
+                    bot.send_message(room_id, f"🏆 **Game Over!** Winner: @{w['name']}")
                 del games[room_id]
                 return True
                 
