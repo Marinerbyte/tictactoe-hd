@@ -3,11 +3,11 @@ import threading
 import time
 import requests
 import traceback
+import tempfile
 
 # --- CONFIG ---
 DOWNLOAD_DIR = "music_cache"
 MAX_QUEUE_SIZE = 15
-COOKIE_FILE = "cookies.txt" # Agar aap GitHub par upload karenge
 
 try:
     import yt_dlp
@@ -25,10 +25,26 @@ def setup(bot):
     if not os.path.exists(DOWNLOAD_DIR): os.makedirs(DOWNLOAD_DIR)
 
 # ==========================================
-# 🎵 MUSIC ENGINE (Fixed for Bot Detection)
+# 🛠️ COOKIE HELPER (Bypasses Bot Detection)
+# ==========================================
+
+def get_cookie_file():
+    """Environment variable se cookies uthata hai aur temp file banata hai"""
+    cookie_content = os.environ.get("YT_COOKIES")
+    if cookie_content:
+        # Ek temporary file banate hain jo delete nahi hogi jab tak bot chal raha hai
+        tmp = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.txt')
+        tmp.write(cookie_content)
+        tmp.close()
+        return tmp.name
+    return None
+
+# ==========================================
+# 🎵 MUSIC ENGINE
 # ==========================================
 
 def search_and_download(query):
+    cookie_path = get_cookie_file()
     try:
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -38,19 +54,11 @@ def search_and_download(query):
             'noplaylist': True,
             'quiet': True,
             'no_check_certificate': True,
-            'add_header': [
-                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language: en-US,en;q=0.5',
-            ]
         }
 
-        # AGAR COOKIES FILE HAI TOH USE KARO
-        if os.path.exists(COOKIE_FILE):
-            print("[Music] Using cookies.txt to bypass bot detection.")
-            ydl_opts['cookiefile'] = COOKIE_FILE
-        else:
-            print("[Music] Warning: cookies.txt not found. Attempting bypass headers...")
+        if cookie_path:
+            ydl_opts['cookiefile'] = cookie_path
+            print("[Music] Using Cookies from Environment Variable.")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=True)
@@ -62,13 +70,15 @@ def search_and_download(query):
                     "duration": s.get('duration', 180)
                 }
     except Exception as e:
-        # Chat mein error bhejta hai taaki aapko pata chale
-        if "confirm you’re not a bot" in str(e):
-            print("[Music] YouTube blocked us. Needs cookies.txt")
         print(f"[Music Error]: {e}")
+    finally:
+        # Temp cookie file ko delete kar dete hain security ke liye
+        if cookie_path and os.path.exists(cookie_path):
+            try: os.remove(cookie_path)
+            except: pass
     return None
 
-# --- UPLOAD & PLAYER LOGIC (Same as before) ---
+# --- UPLOAD & PLAYER LOGIC ---
 
 def upload_audio(filepath):
     try:
@@ -93,20 +103,20 @@ def player_thread(room_id):
         with lock:
             if not state['queue']:
                 state['is_playing'] = False
-                BOT_INSTANCE.send_message(room_id, "⏹️ Queue finished.")
+                BOT_INSTANCE.send_message(room_id, "⏹️ Gaano ki list khatam.")
                 break
             song = state['queue'].pop(0)
 
-        BOT_INSTANCE.send_message(room_id, f"📥 Uploading gaana...")
+        BOT_INSTANCE.send_message(room_id, f"📥 Gaana taiyaar ho raha hai: **{song['title']}**...")
         url = upload_audio(song['filepath'])
         
-        try:
-            if os.path.exists(song['filepath']): os.remove(song['filepath'])
-        except: pass
+        if os.path.exists(song['filepath']): 
+            try: os.remove(song['filepath'])
+            except: pass
         
         if url:
             html = f"<audio src='{url}' controls autoplay></audio>"
-            BOT_INSTANCE.send_message(room_id, f"🎶 Playing: **{song['title']}**\n{html}")
+            BOT_INSTANCE.send_message(room_id, f"🎶 Baj raha hai: **{song['title']}**\n{html}")
             dur = song.get('duration', 180)
             for _ in range(int(dur)):
                 time.sleep(1)
@@ -114,23 +124,25 @@ def player_thread(room_id):
                     if not state['is_playing']: break
             if not state['is_playing']: break
         else:
-            BOT_INSTANCE.send_message(room_id, "❌ Upload Failed.")
+            BOT_INSTANCE.send_message(room_id, "❌ Gaana upload nahi ho paya.")
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     if cmd in ["p", "play"]:
-        if not args: return True
+        if not args:
+            bot.send_message(room_id, "Usage: `!p gaane ka naam`")
+            return True
         query = " ".join(args)
-        bot.send_message(room_id, f"🔎 Searching: **{query}**...")
+        bot.send_message(room_id, f"🔎 Khoj raha hoon: **{query}**...")
         song = search_and_download(query)
         if not song:
-            bot.send_message(room_id, "❌ YouTube ne block kar diya hai. Admin ko cookies.txt update karni hogi.")
+            bot.send_message(room_id, "❌ YouTube ne block kar diya ya gaana nahi mila.")
             return True
         with lock:
             if room_id not in music_state: music_state[room_id] = {'queue': [], 'is_playing': False}
             state = music_state[room_id]
             state['queue'].append(song)
-            bot.send_message(room_id, f"✅ Queued: {song['title']}")
+            bot.send_message(room_id, f"✅ List mein joda gaya: {song['title']}")
             if not state['is_playing']:
                 threading.Thread(target=player_thread, args=(room_id,), daemon=True).start()
         return True
@@ -139,6 +151,6 @@ def handle_command(bot, command, room_id, user, args, data):
             if room_id in music_state:
                 music_state[room_id]['queue'] = []
                 music_state[room_id]['is_playing'] = False
-        bot.send_message(room_id, "⏹️ Stopped.")
+        bot.send_message(room_id, "⏹️ Music band kar diya.")
         return True
     return False
