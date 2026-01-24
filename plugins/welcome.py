@@ -1,4 +1,5 @@
 import io
+import os
 import random
 import uuid
 import requests
@@ -9,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 try: 
     import utils 
 except ImportError: 
-    print("[Welcome] Warning: utils.py not found. Uploads will fail.")
+    print("[Welcome] Warning: utils.py not found.")
 
 # ==========================================
 # ⚙️ CONFIGURATION
@@ -18,106 +19,75 @@ except ImportError:
 WELCOME_ENABLED = True 
 CARD_SIZE = 1024
 
-# 🔥 POWERFUL STICKER API (3D Fun Emojis)
-# Ye style sabse best hai stickers ke liye
-AVATAR_API = "https://api.dicebear.com/9.x/fun-emoji/png?seed={}&backgroundColor=transparent&size=600"
-
-# 🌟 PREMIUM GREETINGS (With Emojis)
-GREETINGS = [
-    "Look who's here! 👀",
-    "Welcome Aboard! 🚀",
-    "A wild user appeared! 🦁",
-    "Glad you made it! ✨",
-    "Welcome to the party! 🥳",
-    "Hop on in! 🐰",
-    "Good to see you! 👋",
-    "Say Hello to... 🎤",
-    "Just landed! 🛬",
-    "The VIP arrived! 💎",
-    "Knock Knock! 🚪",
-    "Player Joined! 🎮"
+# 🌟 PREMIUM AVATAR STYLES (Mix of the best human styles)
+AVATAR_STYLES = [
+    "notionists",   # Sketchy/Cool
+    "adventurer",   # Detailed/RPG
+    "lorelei",      # Artistic/Flat
+    "avataaars",    # Classic Vector
+    "micah"         # Modern Clean
 ]
 
-# 🎨 VIBRANT PALETTES (Backgrounds)
+GREETINGS = [
+    "Look who's here!",
+    "Welcome Aboard!",
+    "A wild user appeared!",
+    "Glad you made it!",
+    "Welcome to the party!",
+    "Hop on in!",
+    "Good to see you!",
+    "Just landed!",
+    "The VIP arrived!",
+    "New Challenger!"
+]
+
+# 🎨 DEEP GRADIENTS (Premium Look)
 PALETTES = [
-    ("#4158D0", "#C850C0", "#FFCC70"), # Peach Purple
-    ("#0093E9", "#80D0C7", "#FFFFFF"), # Aqua Blue
-    ("#8EC5FC", "#E0C3FC", "#FFFFFF"), # Soft Lavender
-    ("#D9AFD9", "#97D9E1", "#FFFFFF"), # Sky Pink
-    ("#FBAB7E", "#F7CE68", "#FFFFFF"), # Warm Gold
-    ("#FF3CAC", "#784BA0", "#2B86C5"), # Deep Neon
-    ("#21D4FD", "#B721FF", "#FFFFFF"), # Electric Purple
+    ("#20002c", "#cbb4d4"), # Dark Purple -> Light
+    ("#000046", "#1cb5e0"), # Deep Sea
+    ("#0f2027", "#2c5364"), # Space
+    ("#373b44", "#4286f4"), # Corporate Blue
+    ("#8e2de2", "#4a00e0"), # Electric Violet
+    ("#1a2a6c", "#b21f1f"), # America
+    ("#000000", "#434343")  # Pure Luxury
 ]
 
 def setup(bot):
-    print("[Welcome] Ultra-Sticker Edition Loaded.")
+    print("[Welcome] Human-Avatar Edition Loaded.")
 
 # ==========================================
-# 🎨 GRAPHICS ENGINE
+# 🎨 ASSET FETCHING
 # ==========================================
 
-class DesignEngine:
-    
-    @staticmethod
-    def get_font(size):
-        """Finds the best font available on the system"""
-        font_paths = [
-            "arialbd.ttf", "arial.ttf", # Windows
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", # Linux (Render)
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
-        ]
-        for path in font_paths:
-            try: return ImageFont.truetype(path, size)
-            except: continue
-        return ImageFont.load_default()
+def get_font(size):
+    """Linux/Windows Safe Fonts"""
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "arialbd.ttf", "arial.ttf"
+    ]
+    for path in font_paths:
+        try: return ImageFont.truetype(path, size)
+        except: continue
+    return ImageFont.load_default()
 
-    @staticmethod
-    def create_background(w, h, c1, c2):
-        """Creates a high-quality gradient with Noise Texture"""
-        # 1. Gradient
-        base = Image.new('RGB', (w, h), c1)
-        top = Image.new('RGB', (w, h), c2)
-        mask = Image.new('L', (w, h))
-        mask_data = []
-        for y in range(h): mask_data.extend([int(255 * (y / h))] * w)
-        mask.putdata(mask_data)
-        base.paste(top, (0, 0), mask)
+def get_avatar(username):
+    """Fetches a RANDOM premium style every time"""
+    try:
+        # Pick a random style (Notion, Adventurer, etc.)
+        style = random.choice(AVATAR_STYLES)
         
-        # 2. Add Noise (Grain Effect for realism)
-        noise = Image.effect_noise((w, h), 10).convert('L')
-        noise = ImageOps.colorize(noise, black="black", white="white").convert('RGBA')
-        noise.putalpha(25) # Subtle grain
+        # Seed ensures consistent look for same user + style
+        seed = f"{username}-{random.randint(1,999)}"
         
-        img = base.convert("RGBA")
-        img.paste(noise, (0,0), noise)
-        return img
-
-    @staticmethod
-    def add_shapes(img):
-        """Adds floating bubbles/shapes"""
-        d = ImageDraw.Draw(img, 'RGBA')
-        W, H = img.size
-        for _ in range(8):
-            x = random.randint(-100, W)
-            y = random.randint(-100, H)
-            s = random.randint(50, 400)
-            fill = (255, 255, 255, 20) # Transparent White
-            d.ellipse([x, y, x+s, y+s], fill=fill)
-        return img
-
-    @staticmethod
-    def get_sticker(username):
-        """Downloads the 3D Emoji Sticker"""
-        try:
-            seed = f"{username}-{random.randint(1,9999)}"
-            url = AVATAR_API.format(seed)
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            r = requests.get(url, headers=headers, timeout=4)
-            if r.status_code == 200:
-                return Image.open(io.BytesIO(r.content)).convert("RGBA")
-        except: pass
-        return None
+        url = f"https://api.dicebear.com/9.x/{style}/png?seed={seed}&size=512&backgroundColor=transparent"
+        
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=4)
+        if r.status_code == 200:
+            return Image.open(io.BytesIO(r.content)).convert("RGBA")
+    except: pass
+    return None
 
 # ==========================================
 # 🖼️ MASTER RENDERER
@@ -126,99 +96,83 @@ class DesignEngine:
 def render_card(username, room_name):
     W, H = CARD_SIZE, CARD_SIZE
     
-    # 1. Setup Theme
-    theme = random.choice(PALETTES)
+    # 1. Background Setup
+    c1, c2 = random.choice(PALETTES)
     greeting = random.choice(GREETINGS)
-    c1, c2, accent = theme
     
-    # 2. Create Art Background
-    bg = DesignEngine.create_background(W, H, c1, c2)
-    bg = DesignEngine.add_shapes(bg)
+    # Gradient
+    base = Image.new('RGB', (W, H), c1)
+    top = Image.new('RGB', (W, H), c2)
+    mask = Image.new('L', (W, H))
+    mask_data = []
+    for y in range(H): mask_data.extend([int(255 * (y / H))] * W)
+    mask.putdata(mask_data)
+    base.paste(top, (0, 0), mask)
+    img = base.convert("RGBA")
     
-    # 3. Create the "Card Body" (Floating Glass)
-    # Isse hum round corners denge
-    card_margin = 60
-    card_w = W - (card_margin * 2)
-    card_h = H - (card_margin * 2)
+    d = ImageDraw.Draw(img)
     
-    # Create Mask for Round Corners
-    mask = Image.new('L', (W, H), 0)
-    d_mask = ImageDraw.Draw(mask)
-    d_mask.rounded_rectangle(
-        [card_margin, card_margin, W-card_margin, H-card_margin], 
-        radius=60, fill=255
-    )
-    
-    # Apply Mask to Background (This makes the outer area transparent or clean)
-    # Actually, let's keep full background but draw a white panel
-    
-    # Draw White Glass Panel
-    panel = Image.new("RGBA", (W, H), (0,0,0,0))
-    d_panel = ImageDraw.Draw(panel)
-    d_panel.rounded_rectangle(
-        [card_margin, card_margin, W-card_margin, H-card_margin],
-        radius=60, fill=(255, 255, 255, 40) # Glassy White
-    )
-    d_panel.rounded_rectangle(
-        [card_margin, card_margin, W-card_margin, H-card_margin],
-        radius=60, outline=(255, 255, 255, 100), width=4 # Sharp White Border
-    )
-    bg.paste(panel, (0,0), panel)
+    # 2. Abstract Shapes (Texture)
+    for _ in range(5):
+        x = random.randint(-200, W); y = random.randint(-200, H)
+        s = random.randint(200, 800)
+        d.ellipse([x, y, x+s, y+s], fill=(255, 255, 255, 10))
 
-    # 4. Avatar (The Sticker)
-    av = DesignEngine.get_sticker(username)
-    av_size = 450
+    # 3. Avatar (Center & Large)
+    av = get_avatar(username)
+    av_size = 420
     cx = W // 2
-    cy = 400 # Top half
+    cy = 400 # Position slightly up
     
     if av:
         av = av.resize((av_size, av_size), Image.Resampling.LANCZOS)
         
-        # Sticker Shadow (Floating Effect)
-        shadow = av.copy()
-        shadow = ImageOps.colorize(shadow.convert('L'), black=(0,0,0), white=(0,0,0))
-        shadow.putalpha(60)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(20))
+        # Circle Crop
+        mask = Image.new('L', (av_size, av_size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, av_size, av_size), fill=255)
         
-        # Paste Shadow then Avatar
-        bg.paste(shadow, (cx - av_size//2, cy - av_size//2 + 20), shadow)
-        bg.paste(av, (cx - av_size//2, cy - av_size//2), av)
+        # Glow/Shadow behind avatar
+        d.ellipse([cx - av_size//2 - 20, cy - av_size//2 - 20, 
+                   cx + av_size//2 + 20, cy + av_size//2 + 20], fill=(255, 255, 255, 30))
+        
+        # Paste Avatar
+        bg_av = Image.new('RGBA', (av_size, av_size), (0,0,0,0))
+        bg_av.paste(av, (0,0), mask)
+        img.paste(bg_av, (cx - av_size//2, cy - av_size//2), bg_av)
+        
+        # White Border Ring
+        d.ellipse([cx - av_size//2, cy - av_size//2, 
+                   cx + av_size//2, cy + av_size//2], outline="white", width=8)
 
-    # 5. Text (Auto-Scaling)
-    d = ImageDraw.Draw(bg)
+    # 4. Text Panel (Bottom Glass)
+    panel_y = 650
+    d.rounded_rectangle([50, panel_y, W-50, H-50], radius=40, fill=(0,0,0, 100)) # Dark Glass
     
-    def draw_auto_text(text, y_pos, max_font, color):
+    # Text Drawing Helper
+    def draw_text(text, y, max_font, color):
         size = max_font
-        font = DesignEngine.get_font(size)
+        font = get_font(size)
+        max_w = W - 140
         
-        # Shrink to fit width
-        max_width = card_w - 40
+        # Auto Scale
         while size > 20:
             try: w = font.getlength(text)
-            except: w = len(text) * (size * 0.6)
-            if w < max_width: break
+            except: w = len(text) * size * 0.6
+            if w < max_w: break
             size -= 5
-            font = DesignEngine.get_font(size)
+            font = get_font(size)
             
-        # Draw Center
         try: w = font.getlength(text)
-        except: w = len(text) * (size * 0.6)
-        x = (W - w) // 2
+        except: w = len(text) * size * 0.6
         
-        # Text Shadow
-        d.text((x+3, y_pos+3), text, font=font, fill=(0,0,0,50))
-        d.text((x, y_pos), text, font=font, fill=color)
+        d.text(((W-w)/2, y), text, font=font, fill=color)
 
-    # Greeting (Small)
-    draw_auto_text(greeting, 650, 50, "white")
-    
-    # Username (Huge)
-    draw_auto_text(username.upper(), 720, 110, "white")
-    
-    # Room Name (Medium)
-    draw_auto_text(f"joined {room_name}", 850, 45, "#EEEEEE")
+    # Render Text
+    draw_text(greeting.upper(), panel_y + 40, 45, "#CCCCCC")
+    draw_text(username, panel_y + 110, 110, "white")
+    draw_text(f"joined {room_name}", panel_y + 250, 50, "#00d2ff") # Blue accent
 
-    return bg
+    return img
 
 # ==========================================
 # ⚡ HANDLERS
@@ -227,14 +181,17 @@ def render_card(username, room_name):
 def process_welcome(bot, room_id, username, room_name):
     try:
         img = render_card(username, room_name)
+        
+        # Upload
         link = utils.upload(bot, img)
+        
         if link:
             bot.send_json({
                 "handler": "chatroommessage",
                 "roomid": room_id,
                 "type": "image",
                 "url": link,
-                "text": f"Welcome {username}! 👋"
+                "text": f"Welcome {username}!"
             })
     except Exception as e:
         print(f"[Welcome] Error: {e}")
@@ -257,17 +214,13 @@ def handle_command(bot, command, room_id, user, args, data):
     
     if cmd == "welcome":
         if not args:
-            status = "ON" if WELCOME_ENABLED else "OFF"
-            bot.send_message(room_id, f"👋 Status: **{status}**")
+            st = "ON" if WELCOME_ENABLED else "OFF"
+            bot.send_message(room_id, f"Status: {st}")
             return True
             
         arg = args[0].lower()
-        if arg == "on":
-            WELCOME_ENABLED = True
-            bot.send_message(room_id, "✅ Enabled")
-        elif arg == "off":
-            WELCOME_ENABLED = False
-            bot.send_message(room_id, "❌ Disabled")
+        if arg == "on": WELCOME_ENABLED = True; bot.send_message(room_id, "✅ ON")
+        elif arg == "off": WELCOME_ENABLED = False; bot.send_message(room_id, "❌ OFF")
         elif arg == "test":
             rname = bot.room_id_to_name_map.get(room_id, "Test Room")
             utils.run_in_bg(process_welcome, bot, room_id, user, rname)
