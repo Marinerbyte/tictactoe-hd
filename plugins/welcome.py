@@ -1,41 +1,73 @@
 import io
 import random
 import uuid
+import math
 import requests
 import time
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps, ImageChops
 
 # --- IMPORTS ---
-# We use the existing utils for threading and uploading to keep the bot stable
 try: 
     import utils 
 except ImportError: 
     print("[Welcome] Warning: utils.py not found. Uploads will fail.")
 
 # ==========================================
-# ⚙️ CONFIGURATION & TOGGLE
+# ⚙️ CONFIGURATION & TOGGLES
 # ==========================================
 
-# GLOBAL TOGGLE (Controlled via !welcome command)
+# GLOBAL TOGGLES (Controlled via !welcome command)
 WELCOME_CARD_ENABLED = True 
+BURST_ENABLED = False  # Set to True to enable GIF generation by default
 
 # DESIGN SETTINGS
-CARD_SIZE = 1024  # 1:1 Aspect Ratio
+CARD_SIZE = 800  # 800x800 is best balance for GIF quality vs speed
 AVATAR_API = "https://api.dicebear.com/9.x/adventurer/png?seed={}&backgroundColor=transparent&size=512"
 
 # MODERN COLOR PALETTES (Bg1, Bg2, Accent, TextColor)
 PALETTES = [
-    ("#2E3192", "#1BFFFF", "#FFFFFF", "white"), # Midnight City
-    ("#D4145A", "#FBB03B", "#FFD700", "white"), # Sunset Vibe
-    ("#009245", "#FCEE21", "#004d00", "white"), # Fresh Lime
-    ("#662D8C", "#ED1E79", "#E0E0E0", "white"), # Deep Berry
-    ("#12c2e9", "#c471ed", "#ffffff", "white"), # Unicorn
-    ("#000000", "#434343", "#F1C40F", "white"), # Luxury Dark
-    ("#FF416C", "#FF4B2B", "#FFCBCB", "white"), # Cherry
+    ("#1A2980", "#26D0CE", "#00FFF0", "white"), # Aqua Splash
+    ("#E55D87", "#5FC3E4", "#FFFFFF", "white"), # Rose Water
+    ("#FF512F", "#DD2476", "#FFD700", "white"), # Bloody Mary
+    ("#11998e", "#38ef7d", "#ccffcc", "white"), # Lush Green
+    ("#0F2027", "#2C5364", "#00d2ff", "white"), # Space Night
+    ("#8E2DE2", "#4A00E0", "#E0C3FC", "white"), # Electric Violet
+    ("#F7971E", "#FFD200", "#FFF", "white"),    # Solar Power
 ]
 
 def setup(bot):
-    print("[Welcome] Plugin Loaded. Auto-Greeter is Active.")
+    print("[Welcome] Plugin Loaded. GIF Engine Ready.")
+
+# ==========================================
+# ✨ PARTICLE SYSTEM (FOR GIFS)
+# ==========================================
+
+class Particle:
+    def __init__(self, cx, cy, color):
+        self.x = cx
+        self.y = cy
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.uniform(2, 15)
+        self.vx = math.cos(angle) * speed
+        self.vy = math.sin(angle) * speed
+        self.size = random.randint(3, 8)
+        self.color = color
+        self.life = 255  # Opacity
+        self.decay = random.randint(15, 30)
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= self.decay
+        self.size = max(0, self.size - 0.2) # Shrink slightly
+
+    def draw(self, draw):
+        if self.life > 0:
+            fill = self.color + (int(self.life),) # Add Alpha
+            draw.ellipse(
+                [self.x, self.y, self.x+self.size, self.y+self.size], 
+                fill=fill
+            )
 
 # ==========================================
 # 🎨 GRAPHICS ENGINE
@@ -45,7 +77,6 @@ class DesignEngine:
     
     @staticmethod
     def get_gradient(w, h, c1, c2):
-        """Generates a high-quality linear gradient"""
         base = Image.new('RGB', (w, h), c1)
         top = Image.new('RGB', (w, h), c2)
         mask = Image.new('L', (w, h))
@@ -57,222 +88,243 @@ class DesignEngine:
         return base
 
     @staticmethod
-    def add_noise(img, factor=0.05):
-        """Adds subtle grain for a premium texture look"""
+    def add_texture(img):
         w, h = img.size
-        # Generate noise
-        noise = Image.effect_noise((w, h), 20).convert('L')
+        # Add subtle noise
+        noise = Image.effect_noise((w, h), 15).convert('L')
         noise = ImageOps.colorize(noise, black="black", white="white").convert('RGBA')
-        noise.putalpha(int(255 * factor))
-        
-        # Blend
+        noise.putalpha(20)
         return Image.alpha_composite(img.convert('RGBA'), noise)
 
     @staticmethod
     def get_avatar(username):
-        """Fetches a unique cartoon avatar based on UUID seed"""
         try:
-            # Create a unique seed using username + random uuid
-            unique_seed = f"{username}-{uuid.uuid4().hex[:8]}"
+            unique_seed = f"{username}-{uuid.uuid4().hex[:6]}"
             url = AVATAR_API.format(unique_seed)
-            
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            r = requests.get(url, headers=headers, timeout=5)
+            r = requests.get(url, timeout=4)
             if r.status_code == 200:
                 return Image.open(io.BytesIO(r.content)).convert("RGBA")
-        except Exception as e:
-            print(f"[Welcome] Avatar Error: {e}")
+        except: pass
         return None
 
     @staticmethod
-    def draw_glass_panel(draw, x, y, w, h):
-        """Draws a modern frosted glass container"""
-        # Semi-transparent dark background
-        draw.rounded_rectangle([x, y, x+w, y+h], radius=40, fill=(0, 0, 0, 80))
-        # Subtle white border
-        draw.rounded_rectangle([x, y, x+w, y+h], radius=40, outline=(255, 255, 255, 50), width=2)
-
-    @staticmethod
     def draw_decorations(draw, w, h, color):
-        """Adds random geometric shapes for uniqueness"""
-        style = random.choice(['circles', 'lines', 'crosses'])
+        style = random.choice(['rings', 'rays', 'dots'])
+        fill_col = (255, 255, 255, 20)
         
-        # Draw subtle shapes in background
-        for _ in range(8):
-            x = random.randint(0, w)
-            y = random.randint(0, h)
-            size = random.randint(50, 300)
-            
-            fill_color = (255, 255, 255, 15) # Very transparent white
-            
-            if style == 'circles':
-                draw.ellipse([x, y, x+size, y+size], fill=fill_color)
-            elif style == 'lines':
-                x2 = x + random.randint(-200, 200)
-                y2 = y + random.randint(-200, 200)
-                draw.line([x, y, x2, y2], fill=fill_color, width=5)
+        if style == 'rings':
+            for _ in range(5):
+                r = random.randint(100, 600)
+                xy = (random.randint(-100, w), random.randint(-100, h))
+                draw.ellipse([xy[0]-r, xy[1]-r, xy[0]+r, xy[1]+r], outline=fill_col, width=3)
+        elif style == 'dots':
+            for _ in range(30):
+                x, y = random.randint(0, w), random.randint(0, h)
+                s = random.randint(5, 20)
+                draw.ellipse([x, y, x+s, y+s], fill=fill_color)
 
 # ==========================================
-# 🖼️ CARD GENERATOR
+# 🖼️ MASTER RENDERER
 # ==========================================
 
 def render_card(username, room_name):
-    """Main rendering pipeline"""
+    """
+    Generates the card. Returns either bytes (PNG) or bytes (GIF).
+    """
     W, H = CARD_SIZE, CARD_SIZE
     
-    # 1. Select Theme
+    # 1. Theme Setup
     theme = random.choice(PALETTES)
-    c1, c2, accent, txt_col = theme
-    
-    # 2. Background
-    img = DesignEngine.get_gradient(W, H, c1, c2)
-    img = DesignEngine.add_noise(img) # Add Texture
-    d = ImageDraw.Draw(img, 'RGBA')
-    
-    # 3. Random Decorations
-    DesignEngine.draw_decorations(d, W, H, accent)
-    
-    # 4. Glass Panel (Bottom Half)
-    # Holds the text
-    panel_h = 450
-    panel_y = H - panel_h - 50
-    panel_x = 50
-    panel_w = W - 100
-    DesignEngine.draw_glass_panel(d, panel_x, panel_y, panel_w, panel_h)
-    
-    # 5. Avatar Processing
-    av_size = 400
+    c1, c2, accent_hex, txt_col = theme
+    # Convert accent hex to RGB tuple for particles
+    accent_rgb = tuple(int(accent_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+
+    # 2. Base Background
+    bg = DesignEngine.get_gradient(W, H, c1, c2)
+    bg = DesignEngine.add_texture(bg)
+    d = ImageDraw.Draw(bg, 'RGBA')
+    DesignEngine.draw_decorations(d, W, H, accent_rgb)
+
+    # 3. Avatar Processing
+    av_size = 350
     avatar = DesignEngine.get_avatar(username)
     
     if avatar:
         avatar = avatar.resize((av_size, av_size), Image.Resampling.LANCZOS)
-        
         # Circular Mask
         mask = Image.new('L', (av_size, av_size), 0)
         ImageDraw.Draw(mask).ellipse((0, 0, av_size, av_size), fill=255)
         
-        # Center Position (Floating above panel)
-        av_x = (W - av_size) // 2
-        av_y = panel_y - (av_size // 2) + 40 
+        # Center Position
+        cx, cy = W // 2, (H // 2) - 50
+        av_x = cx - (av_size // 2)
+        av_y = cy - (av_size // 2)
         
-        # Drop Shadow for Avatar
+        # Shadow
         shadow = Image.new('RGBA', (av_size, av_size), (0,0,0,0))
-        ImageDraw.Draw(shadow).ellipse((10, 10, av_size-10, av_size-10), fill=(0,0,0,60))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(15))
-        img.paste(shadow, (av_x, av_y+10), shadow)
+        ImageDraw.Draw(shadow).ellipse((10, 10, av_size-10, av_size-10), fill=(0,0,0,80))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(20))
+        bg.paste(shadow, (av_x, av_y+10), shadow)
         
         # Paste Avatar
-        img.paste(avatar, (av_x, av_y), mask)
+        bg.paste(avatar, (av_x, av_y), mask)
         
-        # Avatar Border Ring
-        d.ellipse([av_x, av_y, av_x+av_size, av_y+av_size], outline=accent, width=8)
+        # Border Ring
+        d.ellipse([av_x, av_y, av_x+av_size, av_y+av_size], outline=accent_rgb + (255,), width=6)
 
-    # 6. Typography
-    cx = W // 2
-    
-    # "Welcome" Label
-    utils.write_text(d, (cx, panel_y + 220), "WELCOME", size=50, align="center", col="#CCCCCC")
-    
-    # Username (Big)
-    # Using 'shadow=True' for depth
-    utils.write_text(d, (cx, panel_y + 280), username.upper(), size=85, align="center", col="white", shadow=True)
-    
-    # Room Name
-    clean_room = room_name.replace("-", " ").title()
-    utils.write_text(d, (cx, panel_y + 390), f"to {clean_room}", size=40, align="center", col=accent)
+    # 4. Text Overlay
+    # Use utils.write_text logic for consistency, but reimplemented here for custom placement
+    try: font_main = ImageFont.truetype("arial.ttf", 70)
+    except: font_main = ImageFont.load_default()
+    try: font_sub = ImageFont.truetype("arial.ttf", 35)
+    except: font_sub = ImageFont.load_default()
 
-    # 7. Final Polish (Rounded Corners for the whole card)
-    # Create a mask for the main image
-    mask = Image.new('L', (W, H), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, W, H], radius=60, fill=255)
-    final = Image.new('RGBA', (W, H), (0,0,0,0))
-    final.paste(img, (0,0), mask)
-    
-    return final
+    # Calculate text width helper
+    def draw_centered(text, y, font, color, shadow=False):
+        try: w = font.getlength(text)
+        except: w = len(text) * 20
+        x = (W - w) // 2
+        if shadow: d.text((x+3, y+3), text, font=font, fill=(0,0,0,100))
+        d.text((x, y), text, font=font, fill=color)
+
+    draw_centered("WELCOME", H - 280, font_sub, "#DDDDDD")
+    draw_centered(username.upper(), H - 220, font_main, "white", shadow=True)
+    draw_centered(f"to {room_name}", H - 120, font_sub, accent_hex)
+
+    # --- GIF GENERATION BRANCH ---
+    if BURST_ENABLED:
+        frames = []
+        particles = []
+        center_x, center_y = W // 2, (H // 2) - 50
+        
+        # Initialize burst
+        for _ in range(40):
+            particles.append(Particle(center_x, center_y, accent_rgb))
+
+        # Render Frames
+        # Generate 20 frames for the GIF
+        for _ in range(20):
+            # Copy base image
+            frame = bg.copy()
+            fd = ImageDraw.Draw(frame, 'RGBA')
+            
+            # Update & Draw Particles
+            alive_particles = []
+            for p in particles:
+                p.update()
+                p.draw(fd)
+                if p.life > 0: alive_particles.append(p)
+            particles = alive_particles
+            
+            frames.append(frame)
+
+        # Export GIF
+        output = io.BytesIO()
+        frames[0].save(
+            output, 
+            format='GIF', 
+            save_all=True, 
+            append_images=frames[1:], 
+            optimize=False, 
+            duration=60, 
+            loop=0
+        )
+        return output.getvalue(), 'gif'
+
+    # --- STATIC PNG BRANCH ---
+    else:
+        output = io.BytesIO()
+        bg.save(output, format='PNG')
+        return output.getvalue(), 'png'
 
 # ==========================================
 # ⚡ EVENT HANDLERS
 # ==========================================
 
 def background_process(bot, room_id, username, room_name):
-    """Runs in background thread to prevent lag"""
+    """Runs in background to keep bot responsive"""
     try:
-        # Generate
-        img = render_card(username, room_name)
+        # Render (Returns Bytes, Extension)
+        img_bytes, ext = render_card(username, room_name)
         
-        # Upload
-        # Uses utils.upload which handles the API interaction
-        url = utils.upload(bot, img)
+        # Convert bytes back to PIL for utils.upload (it expects PIL or we adjust)
+        # Actually utils.upload expects PIL Image object generally. 
+        # Let's handle it manually here to support GIF bytes directly.
         
-        if url:
-            # Send to room
+        upload_url = None
+        
+        # Custom Upload Logic for GIF/PNG Bytes
+        import requests
+        url = "https://api.howdies.app/api/upload"
+        mime = 'image/gif' if ext == 'gif' else 'image/png'
+        files = {'file': (f'welcome.{ext}', img_bytes, mime)}
+        data = {'token': bot.token, 'uploadType': 'image', 'UserID': bot.user_id or 0}
+        
+        r = requests.post(url, files=files, data=data, timeout=60)
+        if r.status_code == 200:
+            upload_url = r.json().get('url') or r.json().get('data', {}).get('url')
+
+        if upload_url:
+            msg_type = "image" # Both gif and png are treated as image type usually
             bot.send_json({
                 "handler": "chatroommessage",
                 "roomid": room_id,
-                "type": "image",
-                "url": url,
+                "type": msg_type,
+                "url": upload_url,
                 "text": f"Welcome @{username}!"
             })
-        else:
-            print("[Welcome] Upload failed.")
             
     except Exception as e:
-        print(f"[Welcome] Generation Error: {e}")
+        print(f"[Welcome] Error: {e}")
 
-# 1. USER JOIN LISTENER
 def handle_system_message(bot, data):
-    """Detects when a user joins"""
-    
-    # CHECK TOGGLE FIRST
-    if not WELCOME_CARD_ENABLED:
-        return
+    """Triggered on user join"""
+    if not WELCOME_CARD_ENABLED: return
 
-    try:
-        handler = data.get("handler")
+    if data.get("handler") == "userjoin":
+        username = data.get("username")
+        room_id = data.get("roomid")
         
-        if handler == "userjoin":
-            username = data.get("username")
-            room_id = data.get("roomid")
-            
-            # Ignore self
-            if username == bot.user_data.get('username'): return
-            
-            # Resolve Room Name
-            room_name = bot.room_id_to_name_map.get(room_id, "The Chat")
-            
-            print(f"[Welcome] User {username} joined. Generating card...")
-            
-            # Run in background (Non-blocking)
-            utils.run_in_bg(background_process, bot, room_id, username, room_name)
-            
-    except Exception as e:
-        print(f"[Welcome] Event Error: {e}")
+        if username == bot.user_data.get('username'): return
+        
+        room_name = bot.room_id_to_name_map.get(room_id, "Room")
+        
+        # Run in Background
+        utils.run_in_bg(background_process, bot, room_id, username, room_name)
 
-# 2. COMMAND LISTENER (Toggle)
 def handle_command(bot, command, room_id, user, args, data):
-    """Allows admins to turn welcome cards on/off"""
-    global WELCOME_CARD_ENABLED
+    """
+    !welcome on/off
+    !welcome gif on/off
+    """
+    global WELCOME_CARD_ENABLED, BURST_ENABLED
     
     cmd = command.lower().strip()
-    
     if cmd == "welcome":
-        # Security: You might want to add Admin check here
-        # if user not in admins: return
-        
         if not args:
-            status = "ON" if WELCOME_CARD_ENABLED else "OFF"
-            bot.send_message(room_id, f"👋 Welcome Cards are currently **{status}**.")
+            state = "ON" if WELCOME_CARD_ENABLED else "OFF"
+            gif_state = "ON" if BURST_ENABLED else "OFF"
+            bot.send_message(room_id, f"👋 **Welcome Settings:**\nCard: {state}\nGIF Burst: {gif_state}")
             return True
             
-        action = args[0].lower()
+        arg1 = args[0].lower()
         
-        if action == "on":
+        # Toggle Main Feature
+        if arg1 == "on":
             WELCOME_CARD_ENABLED = True
-            bot.send_message(room_id, "✅ **Welcome Cards Enabled!**")
-        elif action == "off":
+            bot.send_message(room_id, "✅ Welcome Cards: **Enabled**")
+        elif arg1 == "off":
             WELCOME_CARD_ENABLED = False
-            bot.send_message(room_id, "🔕 **Welcome Cards Disabled.**")
-        
+            bot.send_message(room_id, "❌ Welcome Cards: **Disabled**")
+            
+        # Toggle GIF Feature
+        elif arg1 == "gif" and len(args) > 1:
+            if args[1].lower() == "on":
+                BURST_ENABLED = True
+                bot.send_message(room_id, "✨ GIF Burst: **Enabled**")
+            elif args[1].lower() == "off":
+                BURST_ENABLED = False
+                bot.send_message(room_id, "🖼️ GIF Burst: **Disabled** (Static Mode)")
+                
         return True
-        
     return False
