@@ -2,17 +2,7 @@ import os
 import threading
 import time
 import requests
-import re
-import urllib.parse
 import uuid
-import sys
-
-# Naye music_utils ko import karne ke liye path set karte hain
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-try:
-    import music_utils
-except ImportError:
-    print("[Music] music_utils.py not found in root!")
 
 # --- GLOBALS ---
 BOT_INSTANCE = None
@@ -20,105 +10,117 @@ BOT_INSTANCE = None
 def setup(bot):
     global BOT_INSTANCE
     BOT_INSTANCE = bot
-    print("[Music] Native Engine with dedicated Utils ready.")
+    print("[Music] Low-Size optimized engine loaded.")
 
 # ==========================================
-# ⚡ BACKGROUND MUSIC PROCESSOR
+# 🎵 MUSIC SEARCH (JioSaavn Vercel API)
 # ==========================================
 
-def process_music_task(bot, room_id, song):
+def fetch_song_saavn(query):
     """
-    Ye function alag thread me chalta hai taaki bot disconnect na ho
+    Saavn se gaana search karke uska sabse chota MP3 link nikalta hai.
     """
     try:
-        video_id = song['id']
+        # Stable Vercel Mirror
+        api_url = f"https://jiosaavn-api-v3.vercel.app/search/songs?query={query}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
         
-        # 1. Gaane ke bytes mangwao
-        audio_content = music_utils.get_direct_mp3_content(video_id)
-        if not audio_content:
-            bot.send_message(room_id, "❌ Maafi, audio server busy hai. Baad me try karein.")
-            return
+        response = requests.get(api_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                song = data[0] # Pehla result
+                
+                # DEVELOPER TIP: 'Size zyada hoga'
+                # downloadUrl[0] -> 12kbps (Extremely Small)
+                # downloadUrl[1] -> 48kbps (Very Small)
+                # downloadUrl[2] -> 96kbps (Small & Good Quality) <- We use this
+                
+                return {
+                    "title": song.get('title', 'Unknown Song'),
+                    "url": song['downloadUrl'][2]['url'], # 96kbps for stability
+                    "duration": song.get('duration', '300'),
+                    "image": song.get('image', [{}])[0].get('url', '')
+                }
+    except Exception as e:
+        print(f"[Music API Error]: {e}")
+    return None
 
-        # 2. Howdies par upload karo
-        howdies_url = music_utils.upload_audio_to_howdies(bot, audio_content, f"{video_id}.mp3")
-        if not howdies_url:
-            bot.send_message(room_id, "❌ Howdies server ne gaana reject kar diya.")
-            return
+# ==========================================
+# ⚡ ASYNC SENDER (To prevent disconnects)
+# ==========================================
 
-        # 3. Chat mein Player bhejo (Exact Mirror of successful bot)
+def send_music_player(bot, room_id, song):
+    try:
         rid = int(room_id)
-        # 16-digit ID mimic karne ke liye timestamp use karte hain
-        msg_id = int(time.time() * 1000000)
+        msg_id = int(time.time() * 1000)
 
-        # A. Pehle Image/Thumbnail
-        bot.send_json({
-            "handler": "chatroommessage",
-            "id": msg_id,
-            "type": "image",
-            "roomid": rid,
-            "url": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-            "text": f"🎶 Now Playing: {song['title']}"
-        })
-        
-        # Chota delay taaki server spam na samjhe
-        time.sleep(2.0)
+        # 1. SEND THUMBNAIL (As per successful bot logs)
+        if song['image']:
+            bot.send_json({
+                "handler": "chatroommessage",
+                "id": msg_id,
+                "type": "image",
+                "roomid": rid,
+                "url": song['image'],
+                "text": f"🎶 {song['title']}"
+            })
+            time.sleep(1.2) # Small gap
 
-        # B. Phir Asli Audio Player
-        bot.send_json({
+        # 2. SEND NATIVE PLAYER (With Low-Size URL)
+        audio_payload = {
             "handler": "chatroommessage",
             "id": msg_id + 1,
             "type": "audio",
             "roomid": rid,
-            "url": howdies_url,
-            "length": "300" # Standard length
-        })
+            "url": song['url'],
+            "length": str(song['duration'])
+        }
         
-        print(f"[Music] Successfully played {song['title']} via native link.")
+        bot.send_json(audio_payload)
+        print(f"[Music] Low-size player sent: {song['title']}")
 
     except Exception as e:
-        print(f"[Music Task Error]: {e}")
+        print(f"[Music Error]: {e}")
 
 # ==========================================
-# 📨 HANDLER & SEARCH
+# 📨 COMMAND HANDLER
 # ==========================================
-
-def get_youtube_info(query):
-    try:
-        search_query = urllib.parse.quote(query)
-        url = f"https://www.youtube.com/results?search_query={search_query}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=10).text
-        
-        v_id = re.search(r"watch\?v=(\S{11})", response)
-        t_match = re.search(r'\"title\":\{\"runs\":\[\{\"text\":\"(.*?)\"\}', response)
-        
-        if v_id and t_match:
-            return {"id": v_id.group(1), "title": t_match.group(1)}
-    except: pass
-    return None
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     
     if cmd in ["p", "play"]:
         if not args:
-            bot.send_message(room_id, "❌ Usage: `!p song name`")
+            bot.send_message(room_id, "❌ Usage: `!p gaane ka naam`")
             return True
             
         query = " ".join(args)
-        bot.send_message(room_id, f"🔎 Searching & Processing: **{query}**...")
+        bot.send_message(room_id, f"🔎 Searching for **{query}**...")
         
-        song = get_youtube_info(query)
-        if not song:
-            bot.send_message(room_id, "❌ Gaana nahi mila.")
-            return True
+        # Background thread me processing taaki bot freeze na ho
+        def run():
+            song = fetch_song_saavn(query)
+            if song:
+                send_music_player(bot, room_id, song)
+            else:
+                bot.send_message(room_id, "❌ Maafi, gaana nahi mil saka.")
 
-        # Process everything in a background thread to prevent "WS Closure"
-        threading.Thread(
-            target=process_music_task, 
-            args=(bot, room_id, song),
-            daemon=True
-        ).start()
-        
+        threading.Thread(target=run, daemon=True).start()
         return True
+
+    # TEST COMMAND FOR TINY FILE
+    if cmd == "tinytouch":
+        tiny_url = "https://www.soundjay.com/buttons/beep-01a.mp3"
+        bot.send_json({
+            "handler": "chatroommessage",
+            "id": int(time.time()*1000),
+            "type": "audio",
+            "roomid": int(room_id),
+            "url": tiny_url,
+            "length": "2"
+        })
+        bot.send_message(room_id, "Bheja! Agar bot nahi nikla toh size ka hi chakkar tha.")
+        return True
+
     return False
