@@ -12,73 +12,80 @@ BOT_INSTANCE = None
 def setup(bot):
     global BOT_INSTANCE
     BOT_INSTANCE = bot
-    print("[Music] Mirror Engine Ready.")
+    print("[Music] Ultra-Stable Mirror Engine Loaded.")
 
 # ==========================================
-# 🎵 THE SCRAPER ENGINE
+# 🎵 THE SCRAPER ENGINE (Improved)
 # ==========================================
 
 def get_youtube_info(query):
     try:
         search_query = urllib.parse.quote(query)
         url = f"https://www.youtube.com/results?search_query={search_query}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=10).text
         
         v_id = re.search(r"watch\?v=(\S{11})", response)
-        t_id = re.search(r'\"title\":\{\"runs\":\[\{\"text\":\"(.*?)\"\}', response)
+        t_match = re.search(r'\"title\":\{\"runs\":\[\{\"text\":\"(.*?)\"\}', response)
         
-        if v_id and t_id:
-            return {"id": v_id.group(1), "title": t_id.group(1)}
+        if v_id and t_match:
+            return {"id": v_id.group(1), "title": t_match.group(1)}
     except: pass
     return None
 
 # ==========================================
-# ⚡ ASYNC SENDING (Connection Bachane ke liye)
+# ⚡ ASYNC PACKET SENDER (Server-Safe)
 # ==========================================
 
 def send_audio_packet(bot, room_id, room_name, song):
     try:
         video_id = song['id']
-        stream_url = f"https://api.vevioz.com/@api/button/mp3/{video_id}"
         
-        # 1. ROOM ID FIX: Ensure it is an Integer
-        rid = int(room_id) if str(room_id).isdigit() else room_id
-        
-        # 2. DATA PACKET: Exactly like the successful bot log
-        audio_payload = {
-            "handler": "chatroommessage",
-            "id": int(time.time() * 1000), # Timestamp ID
-            "type": "audio",
-            "roomid": rid,
-            "room": str(room_name), # Adding room name
-            "url": stream_url,
-            "length": "300" # String length as per log
-        }
-        
-        # 3. SEND Thumbnail first (Spam delay 1s)
+        # 1. DIRECT MP3 LINK (Bypass Vevioz Page)
+        # Ye link direct MP3 stream deta hai jo Howdies ke player me chalega
+        direct_mp3_url = f"https://api.vkrtool.in/youtube/v1/get?id={video_id}"
         thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-        bot.send_json({
+        
+        # 2. ROOM ID FIX: Must be pure Integer
+        rid = int(room_id)
+        
+        # 3. ID SEQUENCE: Mimicking the log exactly
+        # Log me ID 16 digits ka integer hai. Hum timestamp use karenge.
+        client_msg_id = int(time.time() * 1000000)
+
+        # STEP A: Thumbnail Message
+        thumb_payload = {
             "handler": "chatroommessage",
-            "id": int(time.time() * 1000) + 1,
+            "id": client_msg_id,
             "type": "image",
             "roomid": rid,
             "url": thumbnail_url,
-            "text": f"🎶 {song['title']}"
-        })
+            "text": f"🎵 {song['title']}"
+        }
+        bot.send_json(thumb_payload)
         
-        time.sleep(1.5)
+        # Anti-Spam Wait (Very important)
+        time.sleep(2.0)
 
-        # 4. SEND ASLI AUDIO
-        bot.send_json(audio_payload)
+        # STEP B: Asli Audio Message
+        # Payload structure is now exactly like the successful bot
+        audio_payload = {
+            "handler": "chatroommessage",
+            "id": client_msg_id + 1,
+            "type": "audio",
+            "roomid": rid,
+            "url": direct_mp3_url,
+            "length": "300" # Length as string per log
+        }
         
-        print(f"[Music] Audio packet broadcasted for {song['title']}")
+        bot.send_json(audio_payload)
+        print(f"[Music] Successfully broadcasted: {song['title']}")
         
     except Exception as e:
-        print(f"[Music Error] Async Fail: {e}")
+        print(f"[Music Error] Thread Crash: {e}")
 
 # ==========================================
-# 📨 HANDLER
+# 📨 COMMAND HANDLER
 # ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
@@ -92,17 +99,13 @@ def handle_command(bot, command, room_id, user, args, data):
         
         song = get_youtube_info(query)
         if not song:
-            bot.send_message(room_id, "❌ Not found.")
+            bot.send_message(room_id, "❌ Song not found.")
             return True
 
-        # Room name fetch karna zaroori hai payload ke liye
-        room_name = "Goodness" # Default fallback
-        if room_id in bot.room_id_to_name_map:
-            room_name = bot.room_id_to_name_map[room_id]
-        elif 'room' in data:
-            room_name = data['room']
+        # Room name fetch
+        room_name = data.get('room') or bot.room_id_to_name_map.get(room_id, "Room")
 
-        # Heavy work moves to background thread
+        # Start Async Thread
         threading.Thread(
             target=send_audio_packet, 
             args=(bot, room_id, room_name, song),
