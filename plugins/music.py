@@ -12,10 +12,10 @@ BOT_INSTANCE = None
 def setup(bot):
     global BOT_INSTANCE
     BOT_INSTANCE = bot
-    print("[Music] Audio-Type Engine Loaded.")
+    print("[Music] Stable Audio Engine Loaded.")
 
 # ==========================================
-# 🎵 THE SCRAPER ENGINE (YouTube Scraper)
+# 🎵 THE SCRAPER ENGINE
 # ==========================================
 
 def get_youtube_info(query):
@@ -48,7 +48,7 @@ def handle_command(bot, command, room_id, user, args, data):
     
     if cmd in ["p", "play"]:
         if not args:
-            bot.send_message(room_id, "❌ Usage: `!p song name`")
+            bot.send_message(room_id, "❌ Usage: `!p gaane ka naam`")
             return True
             
         query = " ".join(args)
@@ -60,44 +60,51 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_message(room_id, "❌ Gaana nahi mila.")
             return True
 
-        # --- THE MAGIC PAYLOAD (Logs ke hisaab se) ---
+        # --- THE STABLE PAYLOAD ---
         video_id = song['id']
-        # Hum streaming link use kar rahe hain
+        # Try a direct MP3 link format
         stream_url = f"https://api.vevioz.com/@api/button/mp3/{video_id}"
         thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
-        # 1. Pehle Thumbnail bhejo (Jaise doosra bot bhejta hai)
-        bot.send_json({
-            "handler": "chatroommessage",
-            "id": uuid.uuid4().hex,
-            "type": "image",
-            "roomid": room_id,
-            "url": thumbnail_url,
-            "text": f"🎶 {song['title']}"
-        })
+        try:
+            # 1. Sirf 1st Message: Thumbnail (Image)
+            # Room ID ko integer me convert karna zaroori hai
+            rid = int(room_id) if str(room_id).isdigit() else room_id
+            
+            bot.send_json({
+                "handler": "chatroommessage",
+                "id": uuid.uuid4().hex,
+                "type": "image",
+                "roomid": rid,
+                "url": thumbnail_url,
+                "text": f"🎶 Now Playing: {song['title']}"
+            })
 
-        # 2. Ab asli Audio Player bhejo
-        # Type: audio, URL: stream link, Length: 300 (standard 5 mins)
-        audio_payload = {
-            "handler": "chatroommessage",
-            "id": uuid.uuid4().hex,
-            "type": "audio",
-            "roomid": room_id,
-            "url": stream_url,
-            "length": "300",  # Duration in seconds
-            "text": ""        # Audio type mein text khali rakhte hain
-        }
-        
-        bot.send_json(audio_payload)
-        
-        # 3. Last mein details bhej do
-        bot.send_message(room_id, f"✅ **Now Playing:** {song['title']}\n📤 Use `!stop` to end session.")
-        
-        print(f"[Music] Audio packet sent for: {song['title']}")
+            # WAIT: Server ko saans lene do (Spam prevention)
+            time.sleep(1.5)
+
+            # 2. 2nd Message: Audio Player
+            # Hum bilkul wahi format use karenge jo log me tha
+            audio_payload = {
+                "handler": "chatroommessage",
+                "id": uuid.uuid4().hex,
+                "type": "audio",
+                "roomid": rid,
+                "url": stream_url,
+                "length": "300"
+            }
+            
+            bot.send_json(audio_payload)
+            print(f"[Music] Audio packet sent safely for: {song['title']}")
+
+        except Exception as e:
+            print(f"[Music Payload Error]: {e}")
+            bot.send_message(room_id, "⚠️ Error sending player.")
+
         return True
 
     if cmd == "stop":
-        bot.send_message(room_id, "⏹️ Music stopped.")
+        bot.send_message(room_id, "⏹️ Session ended.")
         return True
         
     return False
