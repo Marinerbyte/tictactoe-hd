@@ -1,7 +1,13 @@
 import requests
 import time
 import io
-import re
+
+# Stable Cobalt Instances (Ye jaldi block nahi hote)
+COBALT_INSTANCES = [
+    "https://api.cobalt.tools/api/json",
+    "https://cobalt.shifuserver.xyz/api/json",
+    "https://api.bravo.zip/api/json"
+]
 
 def upload_audio_to_howdies(bot, audio_bytes, filename="song.mp3"):
     """Documentation ke mutabik Howdies server par upload"""
@@ -14,52 +20,56 @@ def upload_audio_to_howdies(bot, audio_bytes, filename="song.mp3"):
             'UserID': bot.user_id 
         }
         
-        print(f"[MusicUtils] Uploading {filename} to Howdies...")
+        print(f"[MusicUtils] Uploading to Howdies...")
         r = requests.post(url, files=files, data=data, timeout=60)
         
         if r.status_code == 200:
             res = r.json()
-            final_url = res.get('url') or res.get('data', {}).get('url')
-            if final_url:
-                print(f"[MusicUtils] Upload Success: {final_url}")
-                return final_url
-        print(f"[MusicUtils] Upload Failed: {r.text}")
+            return res.get('url') or res.get('data', {}).get('url')
     except Exception as e:
-        print(f"[MusicUtils] Error during upload: {e}")
+        print(f"[MusicUtils] Upload Error: {e}")
     return None
 
 def get_direct_mp3_content(video_id):
     """
-    Multi-API Fallback System
-    YouTube ID se MP3 bytes download karne ke liye.
+    Cobalt Engine System: Sabse professional downloader.
     """
-    # List of alternative APIs
-    api_list = [
-        f"https://api.vevioz.com/@api/button/mp3/{video_id}", # API 1
-        f"https://vkr-api.vercel.app/server/api/ytdl?url=https://www.youtube.com/watch?v={video_id}" # API 2
-    ]
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    payload = {
+        "url": video_url,
+        "downloadMode": "audio",
+        "audioFormat": "mp3",
+        "audioBitrate": "128" # Render ke liye small size best hai
+    }
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
 
-    for api_url in api_list:
+    for instance in COBALT_INSTANCES:
         try:
-            print(f"[MusicUtils] Trying to fetch audio from: {api_url}")
-            # Step 1: Link fetch karo
-            resp = requests.get(api_url, timeout=15)
+            print(f"[MusicUtils] Trying Cobalt Instance: {instance}")
+            # Step 1: Get Download Link from Cobalt
+            resp = requests.post(instance, json=payload, headers=headers, timeout=15)
             
-            # Agar API 1 (vevioz) hai, toh ye seedha file content ya redirect de sakta hai
-            if "vevioz" in api_url:
-                if resp.status_code == 200 and len(resp.content) > 100000: # Kam se kam 100KB
-                    return resp.content
-            
-            # Agar API 2 (JSON based) hai
-            elif resp.status_code == 200:
+            if resp.status_code == 200:
                 data = resp.json()
-                dl_link = data.get('url') or data.get('download')
+                # Cobalt link 'url' key me deta hai
+                dl_link = data.get('url')
+                
                 if dl_link:
-                    audio_data = requests.get(dl_link, timeout=30).content
-                    if len(audio_data) > 100000:
-                        return audio_data
+                    print(f"[MusicUtils] Success! Streaming from tunnel...")
+                    # Step 2: Download the actual bytes
+                    audio_resp = requests.get(dl_link, timeout=40, stream=True)
+                    if audio_resp.status_code == 200:
+                        return audio_resp.content
+            else:
+                print(f"[MusicUtils] Instance {instance} returned status {resp.status_code}")
+                
         except Exception as e:
-            print(f"[MusicUtils] API failed: {e}")
-            continue # Agli API try karo
+            print(f"[MusicUtils] Instance {instance} failed: {e}")
+            continue # Agli instance try karo
 
     return None
