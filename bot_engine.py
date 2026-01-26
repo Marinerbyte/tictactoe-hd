@@ -64,45 +64,31 @@ class HowdiesBot:
             rooms = list(self.active_rooms)
         for room in rooms: self.join_room(room)
 
+    # --- YAHAN BADLAAV KIYA GAYA HAI ---
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
             
-            # ======================================================
-            # 🛠️ THE UNIVERSAL EXTRACTOR (Jad se ilaaj)
-            # ======================================================
-            # Server alag-alag naam se data bhejta hai, hum yahan fix kar rahe hain.
-            
-            # 1. USERNAME FIX
-            # Agar 'username' nahi mila, to 'from' ya 'sender' check karo
-            final_username = (
-                data.get("username") or 
-                data.get("from") or 
-                data.get("sender") or 
-                data.get("to")
-            )
-            
-            # 2. USER ID FIX
-            # CamelCase 'userId' aur normal 'userid' dono check karo
-            final_userid = (
-                data.get("userid") or 
-                data.get("userId") or 
-                data.get("id") or 
-                data.get("user_id") or
-                data.get("from_id")
-            )
-
-            # 3. Data me Wapas Daal Do (Standardization)
+            # Universal Extractor
+            final_username = (data.get("username") or data.get("from") or data.get("sender") or data.get("to"))
+            final_userid = (data.get("userid") or data.get("userId") or data.get("id") or data.get("user_id") or data.get("from_id"))
             if final_username: data["username"] = final_username
             if final_userid: data["userid"] = str(final_userid)
             
-            # ======================================================
-
             handler = data.get("handler")
 
-            # --- SYSTEM MESSAGE PASS ---
-            if hasattr(self.plugins, 'process_system_message'):
-                self.plugins.process_system_message(data)
+            # === ⚡ NEW CHANGE FOR LIVE DJ ⚡ ===
+            # Ye system messages (jaise 'audioroom') ko plugins tak bhejta hai
+            is_chat_message = handler in ["chatroommessage", "message", "privatemessage"]
+
+            if not is_chat_message:
+                if hasattr(self.plugins, 'process_system_message'):
+                    self.plugins.process_system_message(data)
+                
+                # Agar audioroom ka message hai, to aage ka code skip kar do
+                if handler == "audioroom":
+                    return 
+            # === END OF NEW CHANGE ===
 
             room_name = None
             room_id = str(data.get("roomid"))
@@ -119,10 +105,7 @@ class HowdiesBot:
             if room_name and room_name not in self.room_details:
                 with self.lock:
                     self.room_details[room_name] = {
-                        'id': room_id, 
-                        'users': [], 
-                        'id_map': {}, 
-                        'chat_log': []
+                        'id': room_id, 'users': [], 'id_map': {}, 'chat_log': []
                     }
                     if room_name not in self.active_rooms: self.active_rooms.append(room_name)
                     if room_id: self.room_id_to_name_map[room_id] = room_name
@@ -148,18 +131,13 @@ class HowdiesBot:
             # 4. Handling User Lists (KICK FIX)
             elif handler in ["activeoccupants", "userslist"] and room_name:
                 raw_users = data.get("users", [])
-                new_users = []
-                new_map = {}
-                
+                new_users = []; new_map = {}
                 for u in raw_users:
-                    # Yahan bhi Extractor logic use kar rahe hain manual
                     uname = u.get('username')
                     uid = str(u.get('userid') or u.get('userId') or u.get('id'))
-                    
                     if uname and uid:
                         new_users.append(uname)
-                        new_map[uname.lower()] = uid # ID Save ho gayi
-                
+                        new_map[uname.lower()] = uid
                 with self.lock:
                     self.room_details[room_name]['users'] = new_users
                     self.room_details[room_name]['id_map'] = new_map
@@ -168,7 +146,7 @@ class HowdiesBot:
             # 5. User Join (Update Map)
             elif handler == "userjoin" and room_name:
                 u = data.get("username")
-                uid = data.get("userid") # Upar Extractor se mil gaya hoga
+                uid = data.get("userid")
                 with self.lock:
                     if u not in self.room_details[room_name]['users']:
                         self.room_details[room_name]['users'].append(u)
@@ -188,19 +166,19 @@ class HowdiesBot:
             traceback.print_exc()
     
     def on_error(self, ws, error): self.log(f"WS Error: {error}")
+    
     def on_close(self, ws, _, __): 
         if self.running: 
-            time.sleep(5); threading.Thread(target=self.connect_ws, daemon=True).start()
+            self.log("Connection lost. Reconnecting in 5 seconds...")
+            time.sleep(5)
+            threading.Thread(target=self.connect_ws, daemon=True).start()
 
     def send_json(self, data):
-        if self.ws and self.ws.sock and self.ws.sock.connected: self.ws.send(json.dumps(data))
+        if self.ws and self.ws.sock and self.ws.sock.connected: 
+            self.ws.send(json.dumps(data))
 
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
-
-    # ==========================================
-    # ---  REQUIRED FUNCTIONS  ---
-    # ==========================================
 
     def upload_to_server(self, image_bytes, file_type='png'):
         import io
@@ -234,4 +212,7 @@ class HowdiesBot:
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
     
     def disconnect(self):
-        self.running = False; self.ws.close()
+        self.running = False
+        # Safe close
+        if self.ws:
+            self.ws.close()
