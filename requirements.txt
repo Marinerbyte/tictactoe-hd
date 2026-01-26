@@ -7,3 +7,5 @@ gunicorn
 psutil
 yt-dlp
 pydub
+aiortc
+av
