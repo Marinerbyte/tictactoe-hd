@@ -9,4 +9,3 @@ yt-dlp
 pydub
 aiortc
 av
-pyaudioop
