@@ -13,42 +13,27 @@ MIN_TIME = 60
 MAX_TIME = 300
 IMMUNITY_DURATION = 300 
 
-# --- LANGUAGE MAP (Codes Fixed) ---
-# Library ko 'hi', 'en', 'ur' pasand hai, 'hindi' nahi.
+# --- LANGUAGE MAP ---
 LANG_MAP = {
-    # Hindi
     "hindi": "hi",  "hin": "hi", "hi": "hi",
-    # English
     "english": "en", "eng": "en", "en": "en",
-    # Urdu
     "urdu": "ur", "urd": "ur", "ur": "ur",
-    # Punjabi
     "punjabi": "pa", "pun": "pa", "pa": "pa",
-    # Marathi
     "marathi": "mr", "mar": "mr", "mr": "mr",
-    # Bengali
     "bengali": "bn", "ben": "bn", "bn": "bn",
-    # Gujarati
     "gujarati": "gu", "guj": "gu", "gu": "gu",
-    # Tamil
     "tamil": "ta", "tam": "ta", "ta": "ta",
-    # Telugu
     "telugu": "te", "tel": "te", "te": "te",
-    # Arabic
     "arabic": "ar", "ara": "ar", "ar": "ar",
-    # French
     "french": "fr", "fre": "fr", "fr": "fr",
-    # Spanish
     "spanish": "es", "spa": "es", "es": "es",
-    # Russian
     "russian": "ru", "rus": "ru", "ru": "ru",
 }
 
 def setup(bot):
-    print("[Auto-Translate] Fixed Version Loaded!")
+    print("[Auto-Translate] Robust Version Loaded!")
 
 def get_lang_code(user_input):
-    """Input se sahi Google Code nikalta hai"""
     clean_input = user_input.lower().strip()
     return LANG_MAP.get(clean_input, clean_input)
 
@@ -66,16 +51,20 @@ def handle_command(bot, command, room_id, user, args, data):
     text = data.get("text", "")
     current_time = time.time()
     
+    # 🧹 ARGUMENT CLEANING (Ye line Double Space fix karegi)
+    # Empty strings ko filter kar diya jayega
+    clean_args = [a for a in args if a.strip()]
+
     # ==========================================
     # 1. COMMANDS
     # ==========================================
     
     if cmd in ["atr", "autotr"]:
-        if not args:
+        if not clean_args:
             bot.send_message(room_id, "⚠️ Usage: `!atr @user [lang] [time]`")
             return True
             
-        target_user = args[0].replace("@", "")
+        target_user = clean_args[0].replace("@", "")
         
         # Check Immunity
         with lock:
@@ -90,8 +79,11 @@ def handle_command(bot, command, room_id, user, args, data):
         target_code = "en"
         duration = MIN_TIME
         
-        # Parse Args
-        for arg in args[1:]:
+        # Parse Args (Start from index 1)
+        for arg in clean_args[1:]:
+            arg = arg.strip()
+            if not arg: continue # Skip empty
+            
             if arg.isdigit():
                 duration = int(arg)
             else:
@@ -101,20 +93,21 @@ def handle_command(bot, command, room_id, user, args, data):
         if duration < MIN_TIME: duration = MIN_TIME
         if duration > MAX_TIME: duration = MAX_TIME
         
+        # Safety Check for Empty Code
+        if not target_code: target_code = "en"
+
         # Test Language
         try:
-            # Test with a dummy word
             GoogleTranslator(source='auto', target=target_code).translate("test")
         except Exception as e:
-            bot.send_message(room_id, f"❌ Error: Language code **'{target_code}'** not supported.\nTry: `hi`, `en`, `ur`.")
-            print(f"Lang Check Error: {e}")
+            bot.send_message(room_id, f"❌ Error: Language code **'{target_code}'** invalid.\nTry: `hi`, `en`, `ur`.")
             return True
         
         with lock:
             if room_id not in watched_users: watched_users[room_id] = {}
             watched_users[room_id][target_user] = target_code
             
-        bot.send_message(room_id, f"👁️ **Spying:** @{target_user} (Target: {target_code.upper()})\n⏳ Timer: {duration}s")
+        bot.send_message(room_id, f"👁️ **Spying:** @{target_user} ({target_code.upper()})\n⏳ Timer: {duration}s")
         
         t = threading.Timer(duration, auto_stop_task, args=[bot, room_id, target_user])
         t.daemon = True
@@ -130,8 +123,8 @@ def handle_command(bot, command, room_id, user, args, data):
         return True
 
     if cmd in ["rtr", "stoptr"]:
-        if not args: return True
-        target_user = args[0].replace("@", "")
+        if not clean_args: return True
+        target_user = clean_args[0].replace("@", "")
         with lock:
             if room_id in watched_users and target_user in watched_users[room_id]:
                 del watched_users[room_id][target_user]
@@ -144,7 +137,6 @@ def handle_command(bot, command, room_id, user, args, data):
     # 2. LISTENER
     # ==========================================
     
-    # Check if user is watched
     is_watched = False
     target_code = "en"
     
@@ -164,12 +156,8 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, f"🗣️ **@{sender}:** {res}")
                 
         except Exception as e:
+            # Silent logging to avoid chat spam
             print(f"Trans Error: {e}")
-            # Agar baar baar error aaye to auto-stop kar do
-            with lock:
-                if room_id in watched_users and sender in watched_users[room_id]:
-                    del watched_users[room_id][sender]
-            bot.send_message(room_id, f"⚠️ Translation Error. Tracking stopped for @{sender}.")
             
         return False
 
