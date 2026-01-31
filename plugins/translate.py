@@ -3,14 +3,17 @@ import threading
 import time
 
 # --- GLOBAL MEMORY ---
-# Format: { 'room_id': { 'username': 'target_language' } }
-watched_users = {}
+watched_users = {} # { 'room_id': { 'username': 'target_language' } }
+immunity_list = {} # { 'username': expiry_timestamp } (Jo !rme use karega)
+
 lock = threading.Lock()
 
-# --- SETTINGS ---
-TIMEOUT_SECONDS = 60  # Kitni der baad band hona chahiye
+# --- CONSTANTS ---
+MIN_TIME = 60
+MAX_TIME = 300
+IMMUNITY_DURATION = 300 # 5 Minutes
 
-# --- CUSTOM SHORTCUTS MAPPING ---
+# --- LANGUAGE MAP ---
 LANG_MAP = {
     "en": "english", "eng": "english",
     "hi": "hindi",   "hin": "hindi",
@@ -25,114 +28,120 @@ LANG_MAP = {
 }
 
 def setup(bot):
-    print("[Auto-Translate] Safe-Mode with Timer Loaded!")
+    print("[Auto-Translate] Pro Version (Timer + Privacy) Loaded!")
 
 def get_full_lang_name(code):
-    code = code.lower().strip()
-    return LANG_MAP.get(code, code)
+    return LANG_MAP.get(code.lower().strip(), code)
 
-# --- BACKGROUND TIMER FUNCTION ---
 def auto_stop_task(bot, room_id, username):
-    """60 Second baad ye function chalega"""
-    removed = False
+    """Timer khatam hone par chalega"""
     with lock:
-        # Check karo ki kya user abhi bhi list mein hai?
-        # (Ho sakta hai user ne khud hi pehle stop kar diya ho)
         if room_id in watched_users and username in watched_users[room_id]:
             del watched_users[room_id][username]
-            removed = True
-            # Agar room khali ho gaya to room key bhi hata do (Clean Memory)
-            if not watched_users[room_id]:
-                del watched_users[room_id]
-
-    if removed:
-        try:
-            bot.send_message(room_id, f"⏰ **Time's Up!** Auto-stopped translation for @{username}.")
-        except:
-            pass # Agar bot disconnect ho gaya ho to crash na kare
+            try:
+                bot.send_message(room_id, f"⏰ **Time Up!** Stopped spying on @{username}.")
+            except: pass
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     sender = data.get("username")
     text = data.get("text", "")
+    current_time = time.time()
     
     # ==========================================
-    # 1. COMMANDS: START & STOP
+    # 1. COMMANDS
     # ==========================================
     
-    # --- START (!atr user lang) ---
+    # --- START (!atr user [lang] [time]) ---
     if cmd in ["atr", "autotr"]:
         if not args:
-            bot.send_message(room_id, "⚠️ **Usage:** `!atr @user <lang>`\nEx: `!atr @yasin hin`")
+            bot.send_message(room_id, "⚠️ **Usage:** `!atr @user [lang] [time]`\nEx: `!atr @yasin hin 120`")
             return True
             
         target_user = args[0].replace("@", "")
         
-        # Language Selection
-        if len(args) > 1:
-            short_code = args[1]
-            target_lang = get_full_lang_name(short_code)
-        else:
-            target_lang = "english"
-            
-        # Language Validity Check
+        # 🛡️ CHECK IMMUNITY (Agar user ne !rme dabaya tha)
+        with lock:
+            if target_user in immunity_list:
+                expiry = immunity_list[target_user]
+                if current_time < expiry:
+                    remaining = int(expiry - current_time)
+                    bot.send_message(room_id, f"🛡️ **Access Denied:** @{target_user} ne privacy mode on kiya hai. ({remaining}s left)")
+                    return True
+                else:
+                    del immunity_list[target_user] # Expired, remove from list
+
+        # Parsing Arguments
+        target_lang = "english"
+        duration = MIN_TIME # Default 60s
+        
+        # Logic to find Lang and Time in arguments
+        # Args can be: ['hin'], ['120'], ['hin', '120'], ['120', 'hin']
+        for arg in args[1:]:
+            if arg.isdigit():
+                duration = int(arg)
+            else:
+                target_lang = get_full_lang_name(arg)
+        
+        # ⏱️ CLAMP TIME (60s to 300s)
+        if duration < MIN_TIME: duration = MIN_TIME
+        if duration > MAX_TIME: duration = MAX_TIME
+        
+        # Check Lang Validity
         try:
             GoogleTranslator(source='auto', target=target_lang)
         except:
-            bot.send_message(room_id, f"❌ Invalid Language: **{target_lang}**")
+            bot.send_message(room_id, f"❌ Invalid Language: {target_lang}")
             return True
         
-        # Add to List (Thread Safe)
         with lock:
-            if room_id not in watched_users:
-                watched_users[room_id] = {}
+            if room_id not in watched_users: watched_users[room_id] = {}
             watched_users[room_id][target_user] = target_lang
+            
+        bot.send_message(room_id, f"👁️ **Spying:** @{target_user} ({target_lang.upper()})\n⏳ Timer: **{duration}s**")
         
-        bot.send_message(room_id, f"👁️ **Spying:** @{target_user} ({target_lang.upper()})\n⏳ Auto-stop in {TIMEOUT_SECONDS}s.")
-        
-        # --- START 60s TIMER ---
-        # Ye background mein chalega, bot ko rokega nahi
-        t = threading.Timer(TIMEOUT_SECONDS, auto_stop_task, args=[bot, room_id, target_user])
-        t.daemon = True # Agar bot band ho to ye bhi band ho jaye
+        # Start Background Timer
+        t = threading.Timer(duration, auto_stop_task, args=[bot, room_id, target_user])
+        t.daemon = True
         t.start()
-        
         return True
 
-    # --- STOP (!rtr user) ---
-    if cmd in ["rtr", "stoptr"]:
-        if not args:
-            bot.send_message(room_id, "⚠️ **Usage:** `!rtr @user`")
-            return True
+    # --- PRIVACY SHIELD (!rme) ---
+    if cmd == "rme": # Remove Me
+        # Check if user is being watched
+        was_watched = False
+        with lock:
+            if room_id in watched_users and sender in watched_users[room_id]:
+                del watched_users[room_id][sender]
+                was_watched = True
             
+            # Add to Immunity List (for 5 mins)
+            immunity_list[sender] = current_time + IMMUNITY_DURATION
+            
+        if was_watched:
+            bot.send_message(room_id, f"🛑 **Privacy On:** @{sender} ne tracking band kar di.\n🛡️ **Immune** for 5 minutes.")
+        else:
+            bot.send_message(room_id, f"🛡️ **Privacy Shield Active!** Koi aapko agle 5 min tak track nahi kar payega.")
+        return True
+
+    # --- MANUAL STOP (!rtr user) ---
+    if cmd in ["rtr", "stoptr"]:
+        if not args: return True
         target_user = args[0].replace("@", "")
-        
         with lock:
             if room_id in watched_users and target_user in watched_users[room_id]:
                 del watched_users[room_id][target_user]
-                bot.send_message(room_id, f"🛑 Stopped translating **@{target_user}** manually.")
+                bot.send_message(room_id, f"🛑 Stopped translation for @{target_user}.")
             else:
-                bot.send_message(room_id, "❌ User is not being watched.")
-        return True
-
-    # --- LIST (!trlist) ---
-    if cmd == "trlist":
-        with lock:
-            users = watched_users.get(room_id, {})
-        if users:
-            msg = ", ".join([f"@{u}→{l}" for u, l in users.items()])
-            bot.send_message(room_id, f"📝 **Active List:** {msg}")
-        else:
-            bot.send_message(room_id, "📝 List empty.")
+                bot.send_message(room_id, "❌ User not tracked.")
         return True
 
     # ==========================================
-    # 2. AUTOMATIC LISTENER
+    # 2. LISTENER
     # ==========================================
-    
     is_watched = False
     target_lang = "english"
     
-    # Fast Check (Lock ke sath)
     with lock:
         if room_id in watched_users and sender in watched_users[room_id]:
             is_watched = True
@@ -141,17 +150,12 @@ def handle_command(bot, command, room_id, user, args, data):
     if is_watched and text and not text.startswith("!"):
         try:
             if text.isdigit() or len(text) < 2: return False
-
             translator = GoogleTranslator(source='auto', target=target_lang)
             translated_text = translator.translate(text)
-            
             if translated_text and translated_text.lower() != text.lower():
                 reply = f"🗣️ **@{sender}:** {translated_text}"
                 bot.send_message(room_id, reply)
-                
-        except Exception as e:
-            print(f"[Auto-Translate Error] {e}")
-        
+        except: pass
         return False
 
     return False
