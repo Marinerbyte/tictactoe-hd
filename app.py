@@ -1,32 +1,21 @@
+import os, threading
 from flask import Flask
 from bot_engine import HowdiesBot
 from ui import register_routes
-import os, threading
 from dotenv import load_dotenv
 
-# VPS par .env ka pura rasta (path) dena zaroori hai
+# --- FIX: .env ko force load karne ke liye ---
 basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '.env'))
-
-# --- DEBUG: Bot start hote hi terminal mein check kar ---
-db_url = os.environ.get("DATABASE_URL")
-ai_key = os.environ.get("GROK_API_KEY")
-
-print("--- [SYSTEM CHECK] ---")
-if db_url: print(f"✅ DATABASE URL: Found (Starts with: {db_url[:15]}...)")
-else: print("❌ DATABASE URL: MISSING!")
-
-if ai_key: print(f"✅ GROK API KEY: Found (Length: {len(ai_key)})")
-else: print("❌ GROK API KEY: MISSING!")
-print("----------------------")
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# Start Bot Instance
-bot = HowdiesBot()
+# Diagnostic Print (Bot start hote hi terminal mein dikhega)
+print(f"DEBUG DB URL: {os.environ.get('DATABASE_URL')[:20] if os.environ.get('DATABASE_URL') else 'NOT FOUND'}")
+print(f"DEBUG AI KEY: {'FOUND' if os.environ.get('GROK_API_KEY') else 'NOT FOUND'}")
 
-# Connect UI to Bot
+bot = HowdiesBot()
 register_routes(app, bot)
 
 if __name__ == "__main__":
