@@ -1,9 +1,10 @@
 from flask import Flask
 from bot_engine import HowdiesBot
 from ui import register_routes
-import os
-import threading
+import os, threading
+from dotenv import load_dotenv
 
+load_dotenv() # .env fetch karne ke liye
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
