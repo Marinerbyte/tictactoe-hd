@@ -5,8 +5,13 @@ import time
 import uuid
 import requests
 import traceback
+import os # <-- Add this
+from dotenv import load_dotenv # <-- Add this
 from plugin_loader import PluginManager
 from db import init_db
+
+# Bot start hone se pehle .env load karlo taaki DB aur AI ko key mil jaye
+load_dotenv() 
 
 API_URL = "https://api.howdies.app/api/login"
 WS_URL = "wss://app.howdies.app/howdies?token={}"
@@ -17,12 +22,11 @@ class HowdiesBot:
         self.user_id = None; self.active_rooms = []; self.logs = []
         self.running = False; self.start_time = time.time()
         
-        # Room Data Storage
         self.room_details = {}
         self.room_id_to_name_map = {}
         
         self.lock = threading.Lock() 
-        init_db()
+        init_db() # load_dotenv() ke baad chal raha hai, ab Postgres hi uthayega
         self.plugins = PluginManager(self)
         self.log("Bot Engine Ready.")
 
@@ -40,6 +44,7 @@ class HowdiesBot:
             if r.status_code == 200:
                 data = r.json()
                 self.token = data.get('token') or data.get('data', {}).get('token')
+                # Yahan numeric ID prioritize kar rahe hain
                 self.user_id = data.get('id') or data.get('user', {}).get('id') or data.get('data', {}).get('id')
                 self.user_data = {"username": username, "password": password}
                 self.log(f"API Login Success. ID: {self.user_id}")
@@ -54,8 +59,9 @@ class HowdiesBot:
         url = WS_URL.format(self.token)
         self.ws = websocket.WebSocketApp(url, on_open=self.on_open, on_message=self.on_message, on_error=self.on_error, on_close=self.on_close)
         self.running = True
-        # Ping Interval 15s (Stable Connection)
-        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=15, ping_timeout=10)); self.ws_thread.daemon = True; self.ws_thread.start()
+        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=15, ping_timeout=10))
+        self.ws_thread.daemon = True
+        self.ws_thread.start()
 
     def on_open(self, ws):
         self.log("WebSocket Connected.")
@@ -64,53 +70,53 @@ class HowdiesBot:
             rooms = list(self.active_rooms)
         for room in rooms: self.join_room(room)
 
-    # --- YAHAN BADLAAV KIYA GAYA HAI ---
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
             
-            # Universal Extractor
+            # --- 🛠️ THE ID FIX (Score wapas laane ke liye) ---
+            # Hum numeric IDs ko priority de rahe hain, Render par yahi Numeric IDs save hui thi.
             final_username = (data.get("username") or data.get("from") or data.get("sender") or data.get("to"))
-            final_userid = (data.get("userid") or data.get("userId") or data.get("id") or data.get("user_id") or data.get("from_id"))
+            
+            # Priority: userId (Number) > id (Number) > username (String)
+            final_userid = (
+                data.get("userid") or 
+                data.get("userId") or 
+                data.get("user_id") or 
+                data.get("from_id") or
+                data.get("id")
+            )
+
             if final_username: data["username"] = final_username
             if final_userid: data["userid"] = str(final_userid)
             
             handler = data.get("handler")
 
-            # === ⚡ NEW CHANGE FOR LIVE DJ ⚡ ===
-            # Ye system messages (jaise 'audioroom') ko plugins tak bhejta hai
+            # === ⚡ SYSTEM MESSAGE PASSING (Tujhe jo chahiye tha) ⚡ ===
             is_chat_message = handler in ["chatroommessage", "message", "privatemessage"]
 
             if not is_chat_message:
                 if hasattr(self.plugins, 'process_system_message'):
                     self.plugins.process_system_message(data)
                 
-                # Agar audioroom ka message hai, to aage ka code skip kar do
                 if handler == "audioroom":
                     return 
-            # === END OF NEW CHANGE ===
+            # === END OF CHANGE ===
 
             room_name = None
-            room_id = str(data.get("roomid"))
+            room_id = str(data.get("roomid") or data.get("roomId", ""))
             
-            # Room Name Resolution
             if room_id in self.room_id_to_name_map:
                 room_name = self.room_id_to_name_map[room_id]
             elif data.get("name"):
                  room_name = data.get("name")
-            elif room_id in self.room_details:
-                 room_name = room_id
 
-            # Auto-Create Room Data
             if room_name and room_name not in self.room_details:
                 with self.lock:
-                    self.room_details[room_name] = {
-                        'id': room_id, 'users': [], 'id_map': {}, 'chat_log': []
-                    }
+                    self.room_details[room_name] = {'id': room_id, 'users': [], 'id_map': {}, 'chat_log': []}
                     if room_name not in self.active_rooms: self.active_rooms.append(room_name)
                     if room_id: self.room_id_to_name_map[room_id] = room_name
 
-            # 1. Chat Processing
             if handler == "chatroommessage":
                 if room_name:
                     author = data.get('username', 'Unknown')
@@ -119,16 +125,13 @@ class HowdiesBot:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
                 self.plugins.process_message(data)
 
-            # 2. Handle Private Messages (DMs)
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
                 self.plugins.process_message(data)            
 
-            # 3. Join Success
             elif handler == "joinchatroom":
                 self.log(f"Joined {room_name}")
                 if room_id: self.send_json({"handler": "getusers", "id": uuid.uuid4().hex, "roomid": room_id})
             
-            # 4. Handling User Lists (KICK FIX)
             elif handler in ["activeoccupants", "userslist"] and room_name:
                 raw_users = data.get("users", [])
                 new_users = []; new_map = {}
@@ -141,19 +144,15 @@ class HowdiesBot:
                 with self.lock:
                     self.room_details[room_name]['users'] = new_users
                     self.room_details[room_name]['id_map'] = new_map
-                self.log(f"Updated list for {room_name}: {len(new_users)} users mapped.")
 
-            # 5. User Join (Update Map)
             elif handler == "userjoin" and room_name:
                 u = data.get("username")
                 uid = data.get("userid")
                 with self.lock:
                     if u not in self.room_details[room_name]['users']:
                         self.room_details[room_name]['users'].append(u)
-                    if uid:
-                        self.room_details[room_name]['id_map'][u.lower()] = uid
+                    if uid: self.room_details[room_name]['id_map'][u.lower()] = uid
 
-            # 6. User Leave
             elif handler == "userleave" and room_name:
                 u = data.get("username")
                 with self.lock:
@@ -169,7 +168,6 @@ class HowdiesBot:
     
     def on_close(self, ws, _, __): 
         if self.running: 
-            self.log("Connection lost. Reconnecting in 5 seconds...")
             time.sleep(5)
             threading.Thread(target=self.connect_ws, daemon=True).start()
 
@@ -213,6 +211,4 @@ class HowdiesBot:
     
     def disconnect(self):
         self.running = False
-        # Safe close
-        if self.ws:
-            self.ws.close()
+        if self.ws: self.ws.close()
