@@ -4,6 +4,8 @@ import threading
 import sys
 import os
 import uuid
+import requests
+import io
 from PIL import Image, ImageDraw, ImageOps, ImageFilter
 
 # --- IMPORTS ---
@@ -28,7 +30,7 @@ def to_small_caps(text):
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[CookieMines] Visual Vibe Engine Loaded.")
+    print("[CookieMines] Heavy Visual Engine - Revised & Final.")
 
 # ==========================================
 # 🕒 AUTO-CLEANUP (120 SECONDS)
@@ -41,7 +43,7 @@ def game_cleanup_loop():
                 if now - g.last_interaction > 120: to_remove.append(rid)
         for rid in to_remove:
             if BOT_INSTANCE:
-                try: BOT_INSTANCE.send_message(rid, to_small_caps("⌛ Game Expired! Inactivity timeout."))
+                try: BOT_INSTANCE.send_message(rid, to_small_caps("⌛ Game Expired! No response for 120s. Cleanup done."))
                 except: pass
             with game_lock:
                 if rid in games:
@@ -54,105 +56,126 @@ if threading.active_count() < 15:
     threading.Thread(target=game_cleanup_loop, daemon=True).start()
 
 # ==========================================
-# 🖌️ VIBE EFFECTS HELPERS
+# 🖌️ VIBE & BLAST EFFECTS ENGINE
 # ==========================================
 
-def apply_burn_effect(img):
-    """Adds a black smoke/burned overlay to the image"""
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(overlay)
+def apply_glow_effect(img):
+    """Adds a golden glow for cookies"""
+    glow = Image.new("RGBA", img.size, (255, 215, 0, 0))
+    d = ImageDraw.Draw(glow)
     W, H = img.size
-    # Drawing random black smoke particles
-    for _ in range(10):
+    d.ellipse([5, 5, W-5, H-5], fill=(255, 215, 0, 45))
+    glow = glow.filter(ImageFilter.GaussianBlur(12))
+    return Image.alpha_composite(img, glow)
+
+def apply_burn_effect(img, intensity=180):
+    """Adds black smoke/burn for bombs"""
+    smoke = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(smoke)
+    W, H = img.size
+    for _ in range(12):
         x, y = random.randint(0, W), random.randint(0, H)
-        r = random.randint(10, 30)
-        d.ellipse([x-r, y-r, x+r, y+r], fill=(0, 0, 0, 160))
-    overlay = overlay.filter(ImageFilter.GaussianBlur(10))
-    return Image.alpha_composite(img, overlay)
+        r = random.randint(8, 25)
+        d.ellipse([x-r, y-r, x+r, y+r], fill=(0, 0, 0, intensity))
+    smoke = smoke.filter(ImageFilter.GaussianBlur(8))
+    return Image.alpha_composite(img, smoke)
 
 # ==========================================
-# 🎨 DYNAMIC BOARD RENDERER
+# 🎨 RENDERING FUNCTIONS
 # ==========================================
+
+def draw_3d_button(d, x, y, size, text):
+    """3D blue button grid style"""
+    radius = 12
+    d.rounded_rectangle([x, y+5, x+size, y+size+5], radius, fill=(25, 40, 70))
+    d.rounded_rectangle([x, y, x+size, y+size], radius, fill=(55, 85, 140), outline="#8899AA")
+    d.rounded_rectangle([x+5, y+5, x+size-5, y+size//2.5], radius, fill=(255, 255, 255, 30))
+    utils.write_text(d, (x+size//2, y+size//2), text, size=28, align="center", shadow=True)
+
+def draw_blast_card(name, lives, avatar_url=None):
+    """Dhamake wala card: Player ki DP jhulash gayi"""
+    W, H = 512, 512
+    img = utils.get_gradient(W, H, (50, 0, 0), (20, 0, 0)).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    for _ in range(12): d.line([(W//2, H//2), (random.randint(0,W), random.randint(0,H))], fill="#800", width=2)
+    boom = utils.get_emoji("💥", size=380)
+    if boom: img.paste(boom, (W//2-190, H//2-200), boom)
+    if avatar_url:
+        user_dp = utils.get_image(avatar_url)
+        if user_dp:
+            user_dp = utils.circle_crop(user_dp, size=200)
+            user_dp = ImageOps.grayscale(user_dp).convert("RGBA") # Grayscale
+            user_dp = apply_burn_effect(user_dp, intensity=210) # Burn
+            img.paste(user_dp, (W//2-100, H//2-100), user_dp)
+            d.line([W//2-70, H//2-70, W//2+70, H//2+70], fill="#F00", width=3)
+            d.ellipse([W//2-102, H//2-102, W//2+102, H//2+102], outline="black", width=4)
+    utils.write_text(d, (W//2, 430), to_small_caps(f"@{name} hit a mine"), size=32, align="center", col="white")
+    utils.write_text(d, (W//2, 475), f"LIVES: {'❤️'*lives}", size=22, align="center", col="#FF4444")
+    return img
+
+def draw_winner_card(name, reward, avatar_url=None):
+    """Trophy with Player DP inside"""
+    W, H = 512, 512
+    img = utils.create_canvas(W, H, (10, 10, 20)); d = ImageDraw.Draw(img)
+    d.rounded_rectangle([15, 15, W-15, H-15], radius=35, outline="#FFD700", width=5)
+    trophy = utils.get_sticker("win", size=320)
+    if trophy:
+        img.paste(trophy, (W//2 - 160, 30), trophy)
+        if avatar_url:
+            user_dp = utils.get_image(avatar_url)
+            if user_dp:
+                user_dp = utils.circle_crop(user_dp, size=115)
+                img.paste(user_dp, (W//2 - 57, 100), user_dp)
+                d.ellipse([W//2-59, 98, W//2+59, 216], outline="white", width=3)
+    utils.write_text(d, (W//2, 390), to_small_caps(name), size=42, align="center", col="#FFD700")
+    utils.write_text(d, (W//2, 450), f"WINNER: {reward} COINS", size=26, align="center", col="#00FF00")
+    return img
 
 def draw_grid_board(game):
-    """Main Game Board with DP + Item + Effects"""
-    W, H = 500, 520
-    img = utils.create_canvas(W, H, color=(20, 20, 30)) 
-    d = ImageDraw.Draw(img)
-    
-    # 1. Header (Scores)
+    """Main Game Board showing state"""
+    W, H = 500, 520; img = utils.create_canvas(W, H, (20, 20, 35)); d = ImageDraw.Draw(img)
     for i, (name, lives, active) in enumerate([(game.p1_name, game.lives_p1, game.turn=='P1'), 
                                                (game.p2_name, game.lives_p2, game.turn=='P2')]):
         x_off = 10 if i == 0 else 310
-        border = "#00FF00" if active else "#555"
-        d.rounded_rectangle([x_off, 10, x_off+180, 75], radius=12, fill=(40, 40, 55), outline=border, width=2)
+        bg_col = (40, 110, 40) if active else (35, 35, 45)
+        d.rounded_rectangle([x_off, 10, x_off+180, 80], radius=12, fill=bg_col, outline="#AAA", width=2)
         utils.write_text(d, (x_off+90, 25), f"@{name[:8]}", size=16, align="center")
-        utils.write_text(d, (x_off+90, 50), "❤️" * lives, size=14, align="center")
-
-    # 2. Grid (12 boxes)
-    start_x, start_y, box_sz, gap = 55, 100, 85, 15
+        utils.write_text(d, (x_off+90, 55), "❤️" * lives, size=14, align="center")
+    start_x, start_y, box_sz, gap = 55, 110, 85, 15
     for i in range(12):
         row, col = i // 4, i % 4
         x, y = start_x + (col * (box_sz + gap)), start_y + (row * (box_sz + gap))
-        
         rev_p1, rev_p2 = game.revealed_p1[i], game.revealed_p2[i]
-        
         if not (rev_p1 or rev_p2):
-            # Closed Box 3D
-            shadow = (30, 40, 60)
-            d.rounded_rectangle([x, y+4, x+box_sz, y+box_sz+4], radius=12, fill=shadow)
-            d.rounded_rectangle([x, y, x+box_sz, y+box_sz], radius=12, fill=(60, 75, 110), outline="#8899AA", width=1)
-            utils.write_text(d, (x+box_sz//2, y+box_sz//2), str(i+1), size=26, align="center")
+            draw_3d_button(d, x, y, box_sz, str(i+1))
         else:
-            # Open Box Logic
             is_bomb = (game.board_p1[i] == 1 or game.board_p2[i] == 1)
-            box_fill = (180, 40, 40) if is_bomb else (40, 150, 70)
-            d.rounded_rectangle([x, y, x+box_sz, y+box_sz], radius=12, fill=box_fill, outline="white", width=2)
-            
-            # --- Draw Item (Cookie/Bomb) ---
-            item_emoji = "💣" if is_bomb else "🍪"
-            item_icon = utils.get_emoji(item_emoji, size=50)
-            if item_icon:
-                # Place item in center
-                img.paste(item_icon, (x+17, y+10), item_icon)
-
-            # --- Draw User DP on top ---
+            d.rounded_rectangle([x, y, x+box_sz, y+box_sz], radius=12, fill=(160, 30, 30) if is_bomb else (30, 130, 60), outline="white", width=2)
+            icon = utils.get_emoji("💣" if is_bomb else "🍪", size=55)
+            if icon: img.paste(icon, (x+15, y+5), icon)
             p_av = game.p1_av if rev_p1 else game.p2_av
             user_dp = utils.get_image(p_av)
             if user_dp:
                 user_dp = utils.circle_crop(user_dp, size=55)
-                if is_bomb:
-                    # Apply Dark/Gray filter to DP for bomb vibe
-                    user_dp = ImageOps.grayscale(user_dp).convert("RGBA")
-                    # Paste with a slight offset to show item behind
-                    img.paste(user_dp, (x+15, y+25), user_dp)
-                else:
-                    img.paste(user_dp, (x+15, y+25), user_dp)
-                # DP Border
+                if is_bomb: user_dp = ImageOps.grayscale(user_dp).convert("RGBA")
+                img.paste(user_dp, (x+15, y+25), user_dp)
                 d.ellipse([x+15, y+25, x+70, y+80], outline="white", width=2)
-
-            # --- Apply Smoke Effect if Bomb ---
-            if is_bomb:
-                # Small smoke overlay inside the box
-                box_area = img.crop((x, y, x+box_sz, y+box_sz))
-                burned = apply_burn_effect(box_area)
-                img.paste(burned, (x, y))
-
-    utils.write_text(d, (W//2, 480), to_small_caps(f"turn: {game.p1_name if game.turn=='P1' else game.p2_name}"), size=20, align="center", col="#FFD700")
+            box_crop = img.crop((x, y, x+box_sz, y+box_sz))
+            if is_bomb: box_crop = apply_burn_effect(box_crop)
+            else: box_crop = apply_glow_effect(box_crop)
+            img.paste(box_crop, (x, y))
+    utils.write_text(d, (W//2, 485), to_small_caps(f"baari: {game.p1_name if game.turn=='P1' else game.p2_name}"), size=18, align="center", col="#FFD700")
     return img
 
 def draw_setup_board():
-    """Lobby DM Board"""
-    W, H = 500, 500
-    img = utils.create_canvas(W, H, (25, 25, 30))
-    d = ImageDraw.Draw(img)
-    start_x, start_y, box_w, box_h, gap = 55, 110, 85, 65, 15
+    W, H = 500, 500; img = utils.create_canvas(W, H, (30, 30, 45)); d = ImageDraw.Draw(img)
+    start_x, start_y, bx_w, bx_h, gap = 55, 110, 85, 65, 15
     for i in range(12):
         row, col = i // 4, i % 4
-        x, y = start_x + (col * (box_w + gap)), start_y + (row * (box_h + gap))
-        d.rounded_rectangle([x, y, x+box_w, y+box_h], radius=10, fill=(40, 50, 70), outline="#AAA")
-        utils.write_text(d, (x+box_w//2, y+box_h//2), str(i+1), size=24, align="center", col="white")
-    utils.write_text(d, (W//2, 50), to_small_caps("hide your bombs"), size=38, align="center", col="#FEE75C", shadow=True)
+        x, y = start_x + (col * (bx_w + gap)), start_y + (row * (bx_h + gap))
+        d.rounded_rectangle([x, y, x+bx_w, y+bx_h], radius=10, fill=(50, 60, 90), outline="#DDD")
+        utils.write_text(d, (x+bx_w//2, y+bx_h//2), str(i+1), size=24, align="center", col="white")
+    utils.write_text(d, (W//2, 50), to_small_caps("hide your bombs"), size=35, align="center", col="#FEE75C", shadow=True)
     return img
 
 # ==========================================
@@ -197,8 +220,8 @@ def handle_command(bot, command, room_id, user, args, data):
             setup_pending[str(g.p1_id)] = room_id; setup_pending[str(g.p2_id)] = room_id
         bot.send_message(room_id, to_small_caps("✅ match found! check DM to set your traps."))
         link = utils.upload(bot, draw_setup_board())
-        bot.send_dm_image(g.p1_name, link, "Reply with 4 unique numbers (1-12) to hide bombs.")
-        bot.send_dm_image(g.p2_name, link, "Reply with 4 unique numbers (1-12) to hide bombs.")
+        bot.send_dm_image(g.p1_name, link, "Reply with 4 unique numbers (1-12) in DM.")
+        bot.send_dm_image(g.p2_name, link, "Reply with 4 unique numbers (1-12) in DM.")
         return True
 
     if str(uid) in setup_pending:
@@ -215,10 +238,10 @@ def handle_command(bot, command, room_id, user, args, data):
                     else:
                         for i in [n-1 for n in nums]: g.board_p2[i] = 1
                         g.p2_ready = True
-                    bot.send_dm(user, "Traps set! Battle starting soon...")
+                    bot.send_dm(user, "Traps set! Battle starting...")
                     if g.p1_ready and g.p2_ready:
                         g.state = 'playing'; del setup_pending[str(g.p1_id)]; del setup_pending[str(g.p2_id)]
-                        bot.send_message(rid, to_small_caps("🔥 Let the hunt begin!"))
+                        bot.send_message(rid, to_small_caps("🔥 battle is live!"))
                         link = utils.upload(bot, draw_grid_board(g))
                         bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": link, "text": "START"})
             return True
@@ -231,32 +254,26 @@ def handle_command(bot, command, room_id, user, args, data):
             if (is_p1 and str(uid)!=str(g.p1_id)) or (not is_p1 and str(uid)!=str(g.p2_id)): return False
             g.touch()
             if g.revealed_p1[idx] or g.revealed_p2[idx]: return True
-            
             if is_p1: g.revealed_p1[idx] = True
             else: g.revealed_p2[idx] = True
-            
             hit = ((g.board_p2 if is_p1 else g.board_p1)[idx] == 1)
-            
+            p_av = g.p1_av if is_p1 else g.p2_av
             if hit:
                 if is_p1: g.lives_p1 -= 1
                 else: g.lives_p2 -= 1
-                bot.send_message(room_id, f"💥 **BOOM!** @{user} hit a bomb!")
+                link = utils.upload(bot, draw_blast_card(user, g.lives_p1 if is_p1 else g.lives_p2, p_av))
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BOOM"})
             else:
-                bot.send_message(room_id, f"🍪 **YUM!** @{user} found a cookie!")
-
-            # Check Winner
+                bot.send_message(room_id, to_small_caps(f"😋 @{user} found a cookie!"))
             win_uid = None
             if g.lives_p1 <= 0: win_uid, win_name, win_av, loser_id = g.p2_id, g.p2_name, g.p2_av, g.p1_id
             elif g.lives_p2 <= 0: win_uid, win_name, win_av, loser_id = g.p1_id, g.p1_name, g.p1_av, g.p2_id
-            
             if win_uid:
-                from mines import draw_winner_card
                 rew = g.bet*2; add_game_result(win_uid, win_name, "mines", rew, True)
                 w_link = utils.upload(bot, draw_winner_card(win_name, rew, win_av))
                 bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": w_link, "text": "WIN"})
                 bot.send_json({"handler": "kickuser", "id": uuid.uuid4().hex, "roomid": int(room_id), "to": int(loser_id)})
                 del games[room_id]; return True
-            
             if not hit: g.turn = 'P2' if is_p1 else 'P1'
             u_link = utils.upload(bot, draw_grid_board(g))
             bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": u_link, "text": "TURN"})
