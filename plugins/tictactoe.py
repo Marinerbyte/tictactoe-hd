@@ -5,6 +5,8 @@ import traceback
 import sys
 import os
 import uuid
+import requests
+import io
 from PIL import Image, ImageDraw, ImageFilter
 
 # --- UTILS & DB IMPORTS ---
@@ -23,55 +25,109 @@ except Exception as e:
 games = {} 
 games_lock = threading.Lock()
 BOT_INSTANCE = None 
+AVATAR_CACHE = {} # Cache for DP to avoid repeated downloads
 
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[TicTacToe] Smart AI & Chips Economy System Ready.")
+    print("[TicTacToe] Fixed UI & Robust Avatar System Loaded.")
 
 # ==========================================
-# 🎨 GRAPHICS ENGINE (Board & Winner Card)
+# 🖼️ ROBUST AVATAR ENGINE
+# ==========================================
+
+def get_robust_avatar(avatar_url, username):
+    """Downloads DP safely, uses caching and provides DiceBear fallback."""
+    if avatar_url in AVATAR_CACHE:
+        return AVATAR_CACHE[avatar_url].copy()
+
+    try:
+        if avatar_url:
+            # Safe download with timeout
+            r = requests.get(avatar_url, timeout=5)
+            if r.status_code == 200:
+                img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+                AVATAR_CACHE[avatar_url] = img
+                return img.copy()
+    except:
+        pass
+
+    # Fallback to DiceBear if download fails or URL is missing
+    try:
+        fb_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={username}&backgroundColor=transparent"
+        r = requests.get(fb_url, timeout=5)
+        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+        return img
+    except:
+        # Absolute fallback: simple gray circle
+        return Image.new("RGBA", (100, 100), (50, 50, 50))
+
+def circle_crop(img, size):
+    """Crops an image into a circle."""
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+    mask = Image.new('L', (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, size, size), fill=255)
+    output = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    output.paste(img, (0, 0), mask)
+    return output
+
+# ==========================================
+# 🎨 GRAPHICS ENGINE (1:1 Ratio)
 # ==========================================
 
 def draw_premium_board(board, p1_name, p2_name, turn, pool):
-    W, H = 600, 750
-    # 1. Midnight Gradient Background
+    # 1:1 Strict Ratio
+    W, H = 700, 700
+    # Midnight Gradient Background
     img = utils.get_gradient(W, H, (10, 15, 30), (30, 10, 50))
     d = ImageDraw.Draw(img, 'RGBA')
 
-    # 2. Header Panel (Glassmorphism)
-    d.rounded_rectangle([40, 30, 560, 150], radius=30, fill=(0,0,0,160), outline="#EC4899", width=3)
-    utils.write_text(d, (W//2, 65), "NEON TIC-TAC-TOE", size=35, align="center", col="#FBB03B", shadow=True)
-    utils.write_text(d, (W//2, 115), f"🎰 POOL: {pool} CHIPS", size=25, align="center", col="#2ecc71")
+    # 1. Clean Header (Reduced Height, No Emojis)
+    # Header box
+    d.rounded_rectangle([20, 20, 680, 110], radius=20, fill=(0, 0, 0, 150), outline="#EC4899", width=2)
+    utils.write_text(d, (W//2, 45), "TIC TAC TOE", size=32, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 85), f"POOL: {pool} CHIPS", size=22, align="center", col="#2ecc71")
 
-    # 3. Smart Neon Grid
+    # 2. Enhanced Grid (Premium Separated Boxes)
     grid_sz = 450
-    cell = grid_sz // 3
-    mx, my = (W - grid_sz)//2, 200
-    for i in range(1, 3):
-        d.line([(mx + cell*i, my), (mx + cell*i, my + grid_sz)], fill="#EC4899", width=6)
-        d.line([(mx, my + cell*i), (mx + grid_sz, my + cell*i)], fill="#EC4899", width=6)
-
-    # 4. Symbols
+    box_sz = grid_sz // 3
+    mx, my = (W - grid_sz)//2, 140
+    
     for i in range(9):
         r, c = i // 3, i % 3
-        cx, cy = mx + c*cell + cell//2, my + r*cell + cell//2
+        bx = mx + c * box_sz
+        by = my + r * box_sz
+        
+        # Draw individual neon boxes
+        # Border color based on status (slight glow effect)
+        d.rounded_rectangle([bx+5, by+5, bx+box_sz-5, by+box_sz-5], radius=15, outline="#4facfe", width=3)
+        
         symbol = board[i]
+        cx, cy = bx + box_sz//2, by + box_sz//2
+        
         if symbol == 'X':
-            s = 40
-            d.line([(cx-s, cy-s), (cx+s, cy+s)], fill="#ff4d4d", width=14)
-            d.line([(cx+s, cy-s), (cx-s, cy+s)], fill="#ff4d4d", width=14)
+            s = 35
+            d.line([(cx-s, cy-s), (cx+s, cy+s)], fill="#ff4d4d", width=12)
+            d.line([(cx+s, cy-s), (cx-s, cy+s)], fill="#ff4d4d", width=12)
         elif symbol == 'O':
-            s = 45
-            d.ellipse([cx-s, cy-s, cx+s, cy+s], outline="#4facfe", width=14)
+            s = 40
+            d.ellipse([cx-s, cy-s, cx+s, cy+s], outline="#4facfe", width=12)
         else:
-            utils.write_text(d, (cx, cy), str(i+1), size=30, col=(255,255,255,30), align="center")
+            # Subtle number hint
+            utils.write_text(d, (cx, cy), str(i+1), size=25, col=(255, 255, 255, 20), align="center")
 
-    utils.write_text(d, (W//2, 700), f"👉 Turn: {p1_name if turn == 'X' else p2_name}", size=28, align="center", col="white")
+    # 3. Footer Area
+    footer_y = 620
+    curr_player = p1_name if turn == 'X' else p2_name
+    utils.write_text(d, (W//2, footer_y), f"TURN: {curr_player}", size=26, align="center", col="white")
+    utils.write_text(d, (W//2, footer_y + 40), "Type 1-9 to play", size=18, align="center", col="#8888AA")
+    
     return img
 
 def draw_victory_card(winner_name, chips_won, avatar_url):
-    W, H = 600, 600 # 1:1 Ratio
+    # 1:1 Ratio
+    W, H = 600, 600
     img = utils.get_gradient(W, H, (15, 12, 41), (48, 43, 99))
     d = ImageDraw.Draw(img, 'RGBA')
     
@@ -79,35 +135,30 @@ def draw_victory_card(winner_name, chips_won, avatar_url):
     for _ in range(3):
         seed = random.randint(1, 9999)
         shape_url = f"https://api.dicebear.com/9.x/shapes/png?seed={seed}&size=250&backgroundColor=transparent"
-        shape_img = utils.get_image(shape_url)
+        shape_img = get_robust_avatar(shape_url, "shape")
         if shape_img:
             shape_img.putalpha(45)
-            img.paste(shape_img, (random.randint(0,350), random.randint(0,350)), shape_img)
+            img.paste(shape_img, (random.randint(0, 350), random.randint(0, 350)), shape_img)
 
-    # Avatar with Glowing Neon Ring
-    if not avatar_url:
-        avatar_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={winner_name}&size=300"
+    # Avatar Handling (Robust)
+    avatar = get_robust_avatar(avatar_url, winner_name)
+    avatar = circle_crop(avatar, 250)
     
-    avatar = utils.get_image(avatar_url)
-    if avatar:
-        avatar = avatar.resize((280, 280), Image.Resampling.LANCZOS)
-        mask = Image.new('L', (280, 280), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 280, 280), fill=255)
-        cx, cy = W//2, 220
-        r = 145
-        d.ellipse([cx-r-10, cy-r-10, cx+r+10, cy+r+10], outline=(236, 72, 153, 100), width=15)
-        d.ellipse([cx-r, cy-r, cx+r, cy+r], outline="#EC4899", width=8)
-        img.paste(avatar, (cx-140, cy-140), mask)
+    cx, cy = W//2, 220
+    # Neon Ring
+    d.ellipse([cx-135, cy-135, cx+135, cy+135], outline=(236, 72, 153, 100), width=12)
+    d.ellipse([cx-128, cy-128, cx+128, cy+128], outline="#EC4899", width=6)
+    img.paste(avatar, (cx-125, cy-125), avatar)
 
-    # Champion Branding
-    d.rounded_rectangle([120, 390, 480, 455], radius=20, fill=(0,0,0,180), outline="#FBB03B", width=3)
-    utils.write_text(d, (W//2, 423), "🎉 CHAMPION 🎉", size=32, align="center", col="#FBB03B", shadow=True)
-    utils.write_text(d, (W//2, 500), winner_name.upper(), size=50, align="center", col="white", shadow=True)
-    utils.write_text(d, (W//2, 560), f"WON {chips_won} CHIPS", size=30, align="center", col="#2ecc71")
+    # Winner Text
+    utils.write_text(d, (W//2, 400), "CHAMPION", size=30, align="center", col="#FBB03B")
+    utils.write_text(d, (W//2, 460), winner_name.upper(), size=45, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 530), f"WON {chips_won} CHIPS", size=32, align="center", col="#2ecc71")
+    
     return img
 
 # ==========================================
-# 🧠 SMART AI & LOGIC
+# 🧠 GAME LOGIC (STRICTLY PRESERVED)
 # ==========================================
 
 def get_smart_move(board):
@@ -149,97 +200,113 @@ class TicTacToeGame:
 # ==========================================
 
 def handle_end(bot, rid, g, result):
-    win_msg = ""; winner_uid = None; winner_name = ""; winner_av = ""; reward = 0
+    winner_uid = None; winner_name = ""; winner_av = ""; reward = 0
     if result == 'draw':
-        win_msg = "🤝 **DRAW!** Chips refunded."
+        bot.send_message(rid, "🤝 DRAW! CHIPS refunded.")
         if g.mode == 2:
             add_game_result(g.p1_id, g.p1_name, "tictactoe", g.bet, False)
             add_game_result(g.p2_id, g.p2_name, "tictactoe", g.bet, False)
-        bot.send_message(rid, win_msg)
     else:
         winner_uid = g.p1_id if result == 'X' else g.p2_id
         winner_name = g.p1_name if result == 'X' else g.p2_name
         winner_av = g.p1_av if result == 'X' else g.p2_av
+        
         if g.mode == 1:
             if winner_uid == "BOT":
-                bot.send_message(rid, "🤖 **Smart Bot Wins!** Better luck next time yasin.")
+                bot.send_message(rid, "🤖 Smart Bot Wins!")
             else: reward = 500
         else: reward = g.bet * 2
 
         if winner_uid != "BOT":
             add_game_result(winner_uid, winner_name, "tictactoe", reward, True)
-            def victory():
+            def victory_task():
                 img = draw_victory_card(winner_name, reward, winner_av)
                 url = utils.upload(bot, img)
                 if url: bot.send_json({"handler":"chatroommessage","roomid":rid,"type":"image","url":url,"text":f"Winner: @{winner_name}"})
-            utils.run_in_bg(victory)
+            threading.Thread(target=victory_task).start()
+
     with games_lock:
         if rid in games: del games[rid]
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip(); uid = str(data.get('userid', user))
-    av_id = data.get("avatar")
-    av_url = f"https://cdn.howdies.app/avatar?image={av_id}" if av_id else None
+    av_url = data.get("avatar") # DIRECTLY FROM PAYLOAD
 
     with games_lock: g = games.get(room_id)
+    
     if cmd == "tic":
         if g: return True
         with games_lock: games[room_id] = TicTacToeGame(room_id, uid, user, av_url)
-        bot.send_message(room_id, f"🎮 **Neon Tic-Tac-Toe**\n@{user}, choose:\n1️⃣ Vs Bot (Free | Win 500)\n2️⃣ Multiplayer (Bet Required)")
+        bot.send_message(room_id, f"🎮 TIC TAC TOE\n@{user}, choose:\n1️⃣ Vs Bot (Win 500 CHIPS)\n2️⃣ Multiplayer (Bet Required)")
         return True
+
     if not g: return False
+
+    # !stop Command Fix
     if cmd == "stop" and (uid == g.p1_id or user.lower() == "yasin"):
-        with games_lock: del games[room_id]
-        bot.send_message(room_id, "🛑 Game Stopped.")
+        with games_lock: 
+            if room_id in games: del games[room_id]
+        bot.send_message(room_id, "🛑 Game has been stopped.")
         return True
+
     if g.state == 'lobby' and uid == g.p1_id:
         if cmd == "1":
             g.mode = 1; g.p2_name = "Smart Bot"; g.p2_id = "BOT"; g.state = 'playing'; g.touch()
-            def start():
+            def start_task():
                 img = draw_premium_board(g.board, g.p1_name, "Smart Bot", 'X', 500)
-                bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Start"})
-            utils.run_in_bg(start); return True
+                bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Game Start"})
+            threading.Thread(target=start_task).start()
+            return True
         if cmd == "2":
-            g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 Bet amount? (e.g. `!bet 500`)"); return True
+            g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 Bet amount? (e.g. `!bet 500`)")
+            return True
+
     if g.state == 'betting' and uid == g.p1_id and cmd == "bet":
         try:
             amt = int(args[0])
             if amt < 100: return True
-            g.bet = amt; g.state = 'waiting'; g.touch(); add_game_result(uid, user, "tictactoe", -amt, False)
-            bot.send_message(room_id, f"⚔️ @{user} is waiting! Bet: {amt} Chips. Type `!join`.")
+            g.bet = amt; g.state = 'waiting'; g.touch()
+            add_game_result(uid, user, "tictactoe", -amt, False)
+            bot.send_message(room_id, f"⚔️ @{user} is waiting! Bet: {amt} CHIPS. Type `!join`.")
         except: pass
         return True
+
     if g.state == 'waiting' and cmd == "join" and uid != g.p1_id:
-        g.p2_id = uid; g.p2_name = user; g.p2_av = av_url; g.state = 'playing'; g.touch(); add_game_result(uid, user, "tictactoe", -g.bet, False)
-        def vs():
+        g.p2_id = uid; g.p2_name = user; g.p2_av = av_url; g.state = 'playing'; g.touch()
+        add_game_result(uid, user, "tictactoe", -g.bet, False)
+        def join_task():
             img = draw_premium_board(g.board, g.p1_name, g.p2_name, 'X', g.bet*2)
-            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"VS"})
-        utils.run_in_bg(vs); return True
+            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Battle Start"})
+        threading.Thread(target=join_task).start()
+        return True
+
     if g.state == 'playing' and cmd.isdigit():
         idx = int(cmd)-1
         if not (0<=idx<=8) or g.board[idx] or uid != (g.p1_id if g.turn == 'X' else g.p2_id): return False
         g.board[idx] = g.turn; g.touch(); res = check_winner(g.board)
         if res: handle_end(bot, room_id, g, res); return True
         g.turn = 'O' if g.turn == 'X' else 'X'
+        
         if g.mode == 1 and g.turn == 'O':
             b_move = get_smart_move(g.board); g.board[b_move] = 'O'; res = check_winner(g.board)
             if res: handle_end(bot, room_id, g, res); return True
             g.turn = 'X'
-        def update():
-            img = draw_premium_board(g.board, g.p1_name, g.p2_name, g.turn, (500 if g.mode==1 else g.bet*2))
+
+        def update_task():
+            pool_val = 500 if g.mode == 1 else g.bet*2
+            img = draw_premium_board(g.board, g.p1_name, g.p2_name, g.turn, pool_val)
             bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Move"})
-        utils.run_in_bg(update); return True
+        threading.Thread(target=update_task).start()
+        return True
     return False
 
 # Cleanup Thread
-def cleanup():
+def cleanup_loop():
     while True:
         time.sleep(20); now = time.time(); to_del = []
         with games_lock:
             for rid, g in games.items():
                 if now - g.last_interaction > 90: to_del.append(rid)
-        for rid in to_del:
-            if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, "⌛ Game Expired.")
-            with games_lock:
+            for rid in to_del:
                 if rid in games: del games[rid]
-threading.Thread(target=cleanup, daemon=True).start()
+threading.Thread(target=cleanup_loop, daemon=True).start()
