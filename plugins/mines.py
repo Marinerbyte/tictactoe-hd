@@ -12,13 +12,13 @@ from PIL import Image, ImageDraw, ImageOps, ImageFilter
 try:
     import utils
 except ImportError:
-    print("[Mines] Error: utils.py not found!")
+    print("[Mines] Error: utils.py missing!")
 
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from db import add_game_result
 except Exception as e:
-    print(f"DB Import Error: {e}")
+    print(f"DB Error: {e}")
 
 # --- GLOBALS ---
 games = {} 
@@ -38,16 +38,15 @@ def setup(bot_ref):
     print("[Mines] Production Engine Loaded.")
 
 # ==========================================
-# 🖼️ ROBUST AVATAR ENGINE
+# 🖼️ AVATAR ENGINE (ROBUST & STABLE)
 # ==========================================
 
 AVATAR_CACHE = {}
 
 def get_robust_avatar(avatar_url, username):
-    """Downloads real DP or generates fallback. Production ready."""
+    """Real DP download karega ya DiceBear fallback dega."""
     if avatar_url in AVATAR_CACHE:
         return AVATAR_CACHE[avatar_url].copy()
-
     try:
         if avatar_url:
             r = requests.get(avatar_url, timeout=5)
@@ -57,8 +56,6 @@ def get_robust_avatar(avatar_url, username):
                 return img.copy()
     except:
         pass
-
-    # Fallback to DiceBear
     try:
         fb_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={username}&backgroundColor=transparent"
         r = requests.get(fb_url, timeout=5)
@@ -77,7 +74,7 @@ def circle_crop(img, size):
     return output
 
 # ==========================================
-# 🖌️ RENDERING ENGINE
+# 🖌️ RENDERING ENGINE (COMPACT SIZE 500x580)
 # ==========================================
 
 def draw_3d_box(d, x, y, size, text):
@@ -87,8 +84,8 @@ def draw_3d_box(d, x, y, size, text):
     utils.write_text(d, (x+size//2, y+size//2), text, size=30, align="center", shadow=True)
 
 def draw_grid_board(game):
-    """Renders the board for the player whose turn it is."""
-    W, H = 500, 650
+    """Compact size taaki Howdies UI pe board na kate."""
+    W, H = 500, 580 
     img = utils.create_canvas(W, H, color=(15, 15, 20))
     d = ImageDraw.Draw(img)
     
@@ -97,72 +94,76 @@ def draw_grid_board(game):
     curr_av = game.p1_av if is_p1 else game.p2_av
     curr_lives = game.lives_p1 if is_p1 else game.lives_p2
     
-    # Header: Stats
-    d.rounded_rectangle([20, 20, 480, 130], radius=25, fill=(45, 55, 85), outline="#00FFFF", width=3)
+    # Header Panel
+    d.rounded_rectangle([15, 10, 485, 110], radius=20, fill=(45, 55, 85), outline="#00FFFF", width=3)
     p_img = get_robust_avatar(curr_av, curr_name)
-    p_img = circle_crop(p_img, 90)
-    img.paste(p_img, (40, 30), p_img)
+    p_img = circle_crop(p_img, 80)
+    img.paste(p_img, (30, 20), p_img)
     
-    utils.write_text(d, (150, 45), to_small_caps(f"Turn: {curr_name}"), size=26, align="left", col="white")
-    utils.write_text(d, (150, 85), f"Lives: {'❤️' * curr_lives}", size=20, align="left")
+    utils.write_text(d, (130, 30), to_small_caps(f"TURN: {curr_name}"), size=24, align="left", col="white")
+    utils.write_text(d, (130, 65), f"LIVES: {'❤️' * curr_lives}", size=22, align="left")
 
-    # Grid Logic: Render the board the current player is walking on
-    # P1 walks on board_p1 (bombs placed by P2)
+    # Grid Logic: Show board the current player is walking on
     target_board = game.board_p1 if is_p1 else game.board_p2
     revealed = game.revealed_p1 if is_p1 else game.revealed_p2
     
-    start_x, start_y, box_sz, gap = 55, 170, 85, 15
+    start_x, start_y, bx_sz, gap = 55, 130, 85, 15
     for i in range(12):
         row, col = i // 4, i % 4
-        x, y = start_x + (col * (box_sz + gap)), start_y + (row * (box_sz + gap))
+        x, y = start_x + (col * (bx_sz + gap)), start_y + (row * (bx_sz + gap))
         
         if not revealed[i]:
-            draw_3d_box(d, x, y, box_sz, str(i+1))
+            draw_3d_box(d, x, y, bx_sz, str(i+1))
         else:
             is_bomb = (target_board[i] == 1)
             box_col = (180, 50, 50) if is_bomb else (50, 180, 80)
-            d.rounded_rectangle([x, y, x+box_sz, y+box_sz], radius=15, fill=box_col, outline="white", width=2)
-            
+            d.rounded_rectangle([x, y, x+bx_sz, y+bx_sz], radius=15, fill=box_col, outline="white", width=2)
             icon = utils.get_emoji("💣" if is_bomb else "🍪", size=50)
             img.paste(icon, (x+17, y+10), icon)
             
-            # Show who revealed it
+            # Show tile opener DP
             u_dp = get_robust_avatar(curr_av, curr_name)
-            u_dp = circle_crop(u_dp, 40)
-            img.paste(u_dp, (x+box_sz-45, y+box_sz-45), u_dp)
+            u_dp = circle_crop(u_dp, 35)
+            img.paste(u_dp, (x+bx_sz-40, y+bx_sz-40), u_dp)
             
     return img
 
 def draw_blast_card(name, avatar_url):
     W, H = 500, 500
-    img = utils.create_canvas(W, H, (30, 0, 0))
+    img = utils.create_canvas(W, H, (35, 0, 0))
     d = ImageDraw.Draw(img)
-    
     boom = utils.get_emoji("💥", size=300)
     img.paste(boom, (100, 50), boom)
-    
     p_img = get_robust_avatar(avatar_url, name)
     p_img = circle_crop(p_img, 200)
-    # Apply Grayscale/Burn to loser
     p_img = ImageOps.grayscale(p_img).convert("RGBA")
     img.paste(p_img, (150, 150), p_img)
-    
-    utils.write_text(d, (250, 420), to_small_caps(f"{name} BLASTED!"), size=40, align="center", col="red")
+    utils.write_text(d, (250, 420), to_small_caps(f"{name} HIT A BOMB!"), size=40, align="center", col="red")
     return img
 
 def draw_winner_card(name, avatar_url):
     W, H = 500, 500
     img = utils.create_canvas(W, H, (10, 30, 10))
     d = ImageDraw.Draw(img)
-    
     trophy = utils.get_sticker("win", size=250)
     img.paste(trophy, (125, 30), trophy)
-    
     p_img = get_robust_avatar(avatar_url, name)
     p_img = circle_crop(p_img, 180)
     img.paste(p_img, (160, 200), p_img)
-    
     utils.write_text(d, (250, 430), to_small_caps(f"WINNER: {name}"), size=40, align="center", col="gold")
+    return img
+
+def draw_setup_instructions():
+    W, H = 500, 500
+    img = utils.create_canvas(W, H, (25, 30, 45))
+    d = ImageDraw.Draw(img)
+    utils.write_text(d, (250, 40), "SET 4 BOMBS (1-12)", size=35, align="center", col="gold")
+    start_x, start_y, bx_w, bx_h, gap = 55, 100, 85, 75, 15
+    for i in range(12):
+        row, col = i // 4, i % 4
+        x, y = start_x + (col * (bx_w + gap)), start_y + (row * (bx_h + gap))
+        d.rounded_rectangle([x, y, x+bx_w, y+bx_h], radius=10, fill=(50, 60, 90), outline="#DDD")
+        utils.write_text(d, (x+bx_w//2, y+bx_h//2), str(i+1), size=24, align="center", col="white")
     return img
 
 # ==========================================
@@ -175,25 +176,19 @@ class MinesGame:
         self.p1_id = p1_id
         self.p1_name = p1_name
         self.p1_av = p1_av
-        
         self.p2_id = self.p2_name = self.p2_av = None
         self.state = 'waiting'
         self.bet = 0
-        
-        # board_p1 contains bombs P1 hits (placed by P2)
-        self.board_p1 = [0]*12
-        self.board_p2 = [0]*12
-        
+        self.board_p1 = [0]*12 # Bombs P1 hits (set by P2)
+        self.board_p2 = [0]*12 # Bombs P2 hits (set by P1)
         self.revealed_p1 = [False]*12
         self.revealed_p2 = [False]*12
-        
         self.lives_p1 = 3
         self.lives_p2 = 3
         self.turn = 'P1'
         self.last_interaction = time.time()
 
-    def touch(self):
-        self.last_interaction = time.time()
+    def touch(self): self.last_interaction = time.time()
 
 # ==========================================
 # 📨 HANDLERS
@@ -205,49 +200,55 @@ def handle_command(bot, command, room_id, user, args, data):
     avatar_url = data.get("avatar")
     cmd = command.lower().strip()
 
-    # --- SETUP: DM BOMB PLACEMENT ---
+    # --- QUICK STOP ---
+    if cmd == "stop" and room_id:
+        with game_lock:
+            g = games.get(room_id)
+            if g and (uid == g.p1_id or user.lower() == "yasin"):
+                if g.p1_id in setup_pending: del setup_pending[g.p1_id]
+                if g.p2_id in setup_pending: del setup_pending[g.p2_id]
+                del games[room_id]
+                bot.send_message(room_id, to_small_caps(f"🛑 Game stopped by {user}."))
+                return True
+
+    # --- DM SETUP LOGIC ---
     if uid in setup_pending and not room_id:
         nums = [int(s) for s in command.replace(',', ' ').split() if s.isdigit()]
         unique_nums = list(set(nums))
-        
         if len(unique_nums) == 4 and all(1 <= n <= 12 for n in unique_nums):
             parent_room = setup_pending[uid]
             with game_lock:
                 g = games.get(parent_room)
                 if not g: 
-                    del setup_pending[uid]
+                    if uid in setup_pending: del setup_pending[uid]
                     return False
-                
-                # Logic: Player A places bombs on Player B's board
+                # Player A sets bombs on Player B's path
                 if uid == g.p1_id:
                     for n in unique_nums: g.board_p2[n-1] = 1
                 else:
                     for n in unique_nums: g.board_p1[n-1] = 1
-                
-                bot.send_dm(user, "✅ Bombs placed! Waiting for opponent...")
+                bot.send_dm(user, "✅ Bombs placed! Wait for opponent...")
                 del setup_pending[uid]
-                
-                # Check if both are ready
-                # We check if both boards have 4 bombs now
                 if sum(g.board_p1) == 4 and sum(g.board_p2) == 4:
                     g.state = 'playing'
-                    bot.send_message(parent_room, to_small_caps("🔥 Both players ready! Game starts."))
-                    img = draw_grid_board(g)
-                    url = utils.upload(bot, img)
-                    bot.send_json({"handler": "chatroommessage", "roomid": parent_room, "type": "image", "url": url, "text": "START"})
+                    bot.send_message(parent_room, to_small_caps("🔥 Setup complete! Game starting."))
+                    url = utils.upload(bot, draw_grid_board(g))
+                    bot.send_json({"handler": "chatroommessage", "roomid": parent_room, "type": "image", "url": url, "text": "GO!"})
             return True
         else:
-            bot.send_dm(user, "❌ Invalid! Send exactly 4 unique numbers between 1 and 12.")
+            bot.send_dm(user, "❌ Send exactly 4 unique numbers (1-12).")
             return True
 
-    # --- ROOM COMMANDS ---
+    # --- ROOM LOBBY ---
     if cmd == "mines":
         bet = int(args[0]) if args and args[0].isdigit() else 500
         with game_lock:
-            if room_id in games: return True
+            if room_id in games:
+                bot.send_message(room_id, "⚠️ Game already running.")
+                return True
             games[room_id] = MinesGame(room_id, uid, user, avatar_url)
             games[room_id].bet = bet
-        bot.send_message(room_id, to_small_caps(f"💣 Mines lobby! @{user} bet {bet}. Type !join."))
+        bot.send_message(room_id, to_small_caps(f"💣 Mines! @{user} bet {bet}. Type !join."))
         return True
 
     if cmd == "join":
@@ -258,32 +259,24 @@ def handle_command(bot, command, room_id, user, args, data):
             g.state = 'setup'
             setup_pending[g.p1_id] = room_id
             setup_pending[g.p2_id] = room_id
-            
-        bot.send_message(room_id, "✅ Match found! Check your DMs to place bombs.")
-        
-        # Send Setup Boards to DMs
+        bot.send_message(room_id, "✅ Match! Check DMs to hide 4 bombs.")
         setup_img = utils.upload(bot, draw_setup_instructions())
-        bot.send_dm_image(g.p1_name, setup_img, f"Place 4 bombs for @{g.p2_name}. Reply 4 numbers (1-12).")
-        bot.send_dm_image(g.p2_name, setup_img, f"Place 4 bombs for @{g.p1_name}. Reply 4 numbers (1-12).")
+        bot.send_dm_image(g.p1_name, setup_img, f"Set bombs for @{g.p2_name}. Reply 4 numbers (1-12).")
+        bot.send_dm_image(g.p2_name, setup_img, f"Set bombs for @{g.p1_name}. Reply 4 numbers (1-12).")
         return True
 
-    # --- GAMEPLAY: ROOM TILES ---
+    # --- GAMEPLAY ---
     if cmd.isdigit() and room_id:
         idx = int(cmd) - 1
         if not (0 <= idx <= 11): return False
-        
         with game_lock:
             g = games.get(room_id)
             if not g or g.state != 'playing': return False
-            
             is_p1 = (g.turn == 'P1')
-            if (is_p1 and uid != g.p1_id) or (not is_p1 and uid != g.p2_id):
-                return False
+            if (is_p1 and uid != g.p1_id) or (not is_p1 and uid != g.p2_id): return False
             
-            # Use appropriate board and revealed tracker
             revealed = g.revealed_p1 if is_p1 else g.revealed_p2
             target_board = g.board_p1 if is_p1 else g.board_p2
-            
             if revealed[idx]: return True
             
             revealed[idx] = True
@@ -292,57 +285,30 @@ def handle_command(bot, command, room_id, user, args, data):
             if target_board[idx] == 1: # HIT BOMB
                 if is_p1: g.lives_p1 -= 1
                 else: g.lives_p2 -= 1
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_blast_card(user, avatar_url)), "text": "BOOM!"})
                 
-                # Show Blast
-                blast = draw_blast_card(user, avatar_url)
-                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, blast), "text": "BOOM!"})
-                
-                # Check for game over
+                # Check Death
                 if (is_p1 and g.lives_p1 <= 0) or (not is_p1 and g.lives_p2 <= 0):
                     winner_name = g.p2_name if is_p1 else g.p1_name
                     winner_av = g.p2_av if is_p1 else g.p1_av
                     loser_id = g.p1_id if is_p1 else g.p2_id
+                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_winner_card(winner_name, winner_av)), "text": "FINISH"})
                     
-                    # Winner Card
-                    win_url = utils.upload(bot, draw_winner_card(winner_name, winner_av))
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": win_url, "text": "GAME OVER"})
-                    
-                    # Economy
-                    add_game_result(winner_name, winner_name, "mines", g.bet * 2, True)
-                    
-                    # Cleanup and Kick
-                    def end_game_proc(rid, target_uid):
+                    # Kick Proc
+                    def kick_proc(rid, target):
                         time.sleep(3)
-                        bot.send_json({"handler": "kickuser", "roomid": int(rid), "to": int(target_uid)})
+                        bot.send_json({"handler": "kickuser", "roomid": int(rid), "to": int(target)})
                         with game_lock:
                             if rid in games: del games[rid]
                     
-                    threading.Thread(target=end_game_proc, args=(room_id, loser_id)).start()
+                    threading.Thread(target=kick_proc, args=(room_id, loser_id)).start()
                     return True
             else:
                 bot.send_message(room_id, f"🍪 @{user} found a cookie!")
 
-            # Switch Turn
             g.turn = 'P2' if is_p1 else 'P1'
-            
-            # Show Updated Board
             url = utils.upload(bot, draw_grid_board(g))
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": "TURN"})
-            
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": "NEXT"})
         return True
 
     return False
-
-def draw_setup_instructions():
-    W, H = 500, 500
-    img = utils.create_canvas(W, H, (25, 30, 45))
-    d = ImageDraw.Draw(img)
-    utils.write_text(d, (250, 50), "BOMB SETUP (1-12)", size=35, align="center", col="gold")
-    
-    start_x, start_y, bx_w, bx_h, gap = 55, 110, 85, 65, 15
-    for i in range(12):
-        row, col = i // 4, i % 4
-        x, y = start_x + (col * (bx_w + gap)), start_y + (row * (bx_h + gap))
-        d.rounded_rectangle([x, y, x+bx_w, y+bx_h], radius=10, fill=(50, 60, 90), outline="#DDD")
-        utils.write_text(d, (x+bx_w//2, y+bx_h//2), str(i+1), size=24, align="center", col="white")
-    return img
