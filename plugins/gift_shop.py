@@ -10,13 +10,12 @@ import utils
 import db
 
 # --- CONFIGURATION ---
-TENOR_KEY = "LIVDSRZULELA"  # Public key (Replace with yours for production)
+TENOR_KEY = "LIVDSRZULELA"  # Public Demo Key
 GIFT_PRICE = 2000
 CLEANUP_TIME = 120  # 2 Minutes
-MAX_FRAMES = 40     # Optimization: Limit frames to prevent bloating
+MAX_FRAMES = 40     # Optimization
 
 # --- STATE & LOCKS ---
-# Structure: { user_id: { 'gif_bytes': bytes, 'target_name': str, 'timestamp': time } }
 pending_gifts = {}
 gift_lock = threading.Lock()
 
@@ -26,13 +25,13 @@ def setup(bot):
     print("[GiftShop] Professional GIF Engine & Memory Manager Loaded.")
 
 # ==========================================
-# 🧠 MEMORY MANAGEMENT (Garbage Collector)
+# 🧠 MEMORY MANAGEMENT
 # ==========================================
 
 def auto_cleanup_task():
     """RAM bachane ke liye purane generated GIFs ko delete karta hai."""
     while True:
-        time.sleep(30) # Check every 30 seconds
+        time.sleep(30)
         now = time.time()
         with gift_lock:
             expired_users = [
@@ -41,20 +40,12 @@ def auto_cleanup_task():
             ]
             for uid in expired_users:
                 del pending_gifts[uid]
-                # Log (Optional)
-                # print(f"[GC] Cleaned up expired gift for {uid}")
 
 # ==========================================
-# 🎨 GIF PROCESSING ENGINE (The Artist)
+# 🎨 GIF PROCESSING ENGINE
 # ==========================================
 
 def create_personalized_gif(gif_url, target_name):
-    """
-    1. Downloads GIF.
-    2. Crops to Circle.
-    3. Adds Gold Border.
-    4. Adds 'For Name' Text Badge.
-    """
     try:
         # 1. Download
         resp = requests.get(gif_url, timeout=10)
@@ -62,26 +53,23 @@ def create_personalized_gif(gif_url, target_name):
         
         im = Image.open(io.BytesIO(resp.content))
         
-        # Output Setup
         frames = []
-        size = (300, 300) # Standard Sticker Size
+        size = (300, 300) 
         
-        # Font Setup (Try loading bold font from utils or system)
         try:
             font = ImageFont.truetype("arialbd.ttf", 22)
         except:
             font = ImageFont.load_default()
 
         # 2. Frame Processing Loop
-        # ImageSequence iterator handles animated GIFs
         i = 0
         for frame in ImageSequence.Iterator(im):
             i += 1
-            if i > MAX_FRAMES: break # Optimize size
+            if i > MAX_FRAMES: break 
             
             frame = frame.convert("RGBA").resize(size, Image.Resampling.LANCZOS)
             
-            # --- A. Circular Mask ---
+            # Mask
             mask = Image.new('L', size, 0)
             draw_mask = ImageDraw.Draw(mask)
             draw_mask.ellipse((0, 0) + size, fill=255)
@@ -91,21 +79,21 @@ def create_personalized_gif(gif_url, target_name):
             
             d = ImageDraw.Draw(output)
             
-            # --- B. Premium Gold Border ---
-            # Outer Gold
+            # Gold Border
             d.ellipse([2, 2, 298, 298], outline="#FFD700", width=5)
-            # Inner White Glow
             d.ellipse([7, 7, 293, 293], outline=(255, 255, 255, 120), width=2)
 
-            # --- C. Text Badge (Dynamic Size) ---
+            # Text Badge
             text = f"For {target_name.title()}"
             
-            # Calculate Text Size to center it
-            bbox = d.textbbox((0, 0), text, font=font)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-            
-            # Badge Background (Black Glass)
+            # Text Size Calculation
+            # Pillow version compatibility fix
+            try:
+                bbox = d.textbbox((0, 0), text, font=font)
+                text_w = bbox[2] - bbox[0]
+            except:
+                text_w = len(text) * 10 # Fallback estimation
+
             badge_w = text_w + 40
             bx1 = (300 - badge_w) // 2
             by1 = 240
@@ -115,14 +103,11 @@ def create_personalized_gif(gif_url, target_name):
             d.rounded_rectangle([bx1, by1, bx2, by2], radius=15, fill=(0,0,0,200), outline="#FFD700", width=2)
             
             # Draw Text
-            # Shadow
             d.text((150+1, 258+1), text, font=font, fill="black", anchor="mm")
-            # Main
             d.text((150, 258), text, font=font, fill="#FFD700", anchor="mm")
 
             frames.append(output)
 
-        # 3. Export
         if not frames: return None
         
         output_io = io.BytesIO()
@@ -164,7 +149,6 @@ def handle_command(bot, command, room_id, user, args, data):
     uid = str(data.get('userid', user))
     
     # 1. GENERATE PREVIEW (!gif name query)
-    # Example: !gif yasin rose
     if cmd in ["gif", "gf"]:
         if len(args) < 2:
             bot.send_message(room_id, "🎁 Usage: `!gif <Name> <Query>`\nExample: `!gif Yasin Rose`")
@@ -175,7 +159,6 @@ def handle_command(bot, command, room_id, user, args, data):
         
         bot.send_message(room_id, f"🎨 Creating custom gift for **{target_name}**... (Please wait)")
         
-        # Heavy processing in background thread
         def generate_task():
             try:
                 # A. Find GIF
@@ -184,20 +167,19 @@ def handle_command(bot, command, room_id, user, args, data):
                     bot.send_message(room_id, "❌ GIF not found.")
                     return
 
-                # B. Process GIF (The Heavy Part)
+                # B. Process GIF
                 processed_bytes = create_personalized_gif(raw_url, target_name)
                 if not processed_bytes:
                     bot.send_message(room_id, "⚠️ Rendering failed.")
                     return
 
-                # C. Upload
-                # Passing 'gif' explicitly to utils
-                upl_url = bot.plugins.plugins['utils'].utils_instance.upload_image_fast(
-                    io.BytesIO(processed_bytes), bot.token, bot.user_id, file_type='gif'
-                )
+                # C. Upload (FIXED LINE)
+                # Hum utils.upload use kar rahe hain jo internally sahi function call karega
+                # ext='gif' batana zaroori hai taaki server sahi mime type samjhe
+                upl_url = utils.upload(bot, io.BytesIO(processed_bytes), ext='gif')
 
                 if upl_url:
-                    # D. Save to State (Thread Safe)
+                    # D. Save to State
                     with gift_lock:
                         pending_gifts[uid] = {
                             'url': upl_url,
@@ -219,6 +201,7 @@ def handle_command(bot, command, room_id, user, args, data):
             
             except Exception as e:
                 print(f"Task Error: {e}")
+                traceback.print_exc() # Print full error to logs
                 bot.send_message(room_id, "❌ System error occurred.")
 
         utils.run_in_bg(generate_task)
@@ -226,18 +209,15 @@ def handle_command(bot, command, room_id, user, args, data):
 
     # 2. SHARE & PAY (!share)
     if cmd == "share":
-        # Check State
         gift_data = None
         with gift_lock:
             if uid in pending_gifts:
-                gift_data = pending_gifts.pop(uid) # Pop removes it (Cleanup immediately)
+                gift_data = pending_gifts.pop(uid)
         
         if not gift_data:
-            bot.send_message(room_id, "⚠️ No gift ready! Create one: `!gif <Name> <Topic>`")
+            bot.send_message(room_id, "⚠️ No gift ready! Use `!gif <Name> <Topic>` first.")
             return True
             
-        # Target from arguments OR from the generated gift name
-        # User can optionally override: !share @user
         final_target = args[0].replace("@", "") if args else gift_data['target_name']
         
         # Economy Check
