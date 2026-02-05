@@ -1,230 +1,152 @@
-import time
 import random
-import threading
-import sys
-import os
-import uuid
-import requests
+import math
 import io
+import requests
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-# --- UTILS & DB ---
-try:
-    import utils
-except ImportError:
-    print("[PenaltyStrike] Error: utils.py missing!")
+# --- CONFIGURATION ---
+W, H = 700, 700
+TURF_COLORS = [(15, 45, 15), (30, 80, 30)]  # Deep turf green
+NEON_PINK = "#EC4899"
+NEON_BLUE = "#4facfe"
+GOLD = "#FFD700"
 
-try:
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from db import add_game_result
-except Exception as e:
-    print(f"DB Error: {e}")
+# Target Coordinates for Ball/Goalie
+POS_MAP = {
+    1: {"ball": (180, 280), "gk": (180, 260)},  # Left
+    2: {"ball": (350, 260), "gk": (350, 260)},  # Center
+    3: {"ball": (520, 280), "gk": (520, 260)}   # Right
+}
 
-# --- GLOBAL STATE ---
-penalty_games = {} 
-games_lock = threading.Lock()
-BOT_INSTANCE = None 
-AVATAR_CACHE = {}
+SHOOTER_POS = (350, 600) # Starting point of the ball
 
-def setup(bot_ref):
-    global BOT_INSTANCE
-    BOT_INSTANCE = bot_ref
-    print("[PenaltyStrike] Ultimate Visuals Engine Loaded.")
+class PenaltyVisuals:
+    @staticmethod
+    def get_gradient_canvas(w, h, c1, c2):
+        base = Image.new('RGB', (w, h), c1)
+        top = Image.new('RGB', (w, h), c2)
+        mask = Image.new('L', (w, h))
+        for y in range(h):
+            mask.putpixel((0, y), int(255 * (y / h)))
+        mask = mask.resize((w, h))
+        base.paste(top, (0, 0), mask)
+        return base.convert("RGBA")
 
-# ==========================================
-# 🖼️ ROBUST AVATAR ENGINE
-# ==========================================
+    @staticmethod
+    def draw_motion_trail(draw, start, end, color):
+        """Draws a cinematic trail from shooter to target"""
+        steps = 10
+        for i in range(steps):
+            t = i / steps
+            curr_x = start[0] + (end[0] - start[0]) * t
+            curr_y = start[1] + (end[1] - start[1]) * t
+            size = int(10 + (20 * t))
+            opacity = int(150 * t)
+            draw.ellipse([curr_x-size, curr_y-size, curr_x+size, curr_y+size], 
+                         fill=(*color, opacity))
 
-def get_robust_avatar(avatar_url, username):
-    if avatar_url in AVATAR_CACHE:
-        return AVATAR_CACHE[avatar_url].copy()
-    try:
-        if avatar_url:
-            r = requests.get(avatar_url, timeout=5)
-            if r.status_code == 200:
-                img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-                AVATAR_CACHE[avatar_url] = img
-                return img.copy()
-    except: pass
-    try:
-        fb_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={username}&backgroundColor=transparent"
-        r = requests.get(fb_url, timeout=5)
-        return Image.open(io.BytesIO(r.content)).convert("RGBA")
-    except:
-        return Image.new("RGBA", (100, 100), (30, 30, 35))
+    @staticmethod
+    def draw_impact_glow(img, pos, color):
+        """Creates a soft flash/glow effect at the impact point"""
+        glow = Image.new("RGBA", (W, H), (0,0,0,0))
+        d = ImageDraw.Draw(glow)
+        for r in range(100, 0, -10):
+            alpha = int(100 * (1 - r/100))
+            d.ellipse([pos[0]-r, pos[1]-r, pos[0]+r, pos[1]+r], fill=(*color, alpha))
+        glow = glow.filter(ImageFilter.GaussianBlur(15))
+        return Image.alpha_composite(img, glow)
 
-# ==========================================
-# 🖌️ ENHANCED RENDERER (Goal Effects & DiceBear)
-# ==========================================
+    @staticmethod
+    def create_card(username, user_av, result="VS", user_pos=None, bot_pos=None):
+        # 1. Base Background
+        img = PenaltyVisuals.get_gradient_canvas(W, H, TURF_COLORS[0], TURF_COLORS[1])
+        d = ImageDraw.Draw(img, 'RGBA')
 
-def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=None):
-    W, H = 700, 700
-    # 1. Premium Turf Background
-    base = utils.get_gradient(W, H, (10, 40, 10), (20, 80, 20))
-    img = Image.new('RGBA', (W, H), (0,0,0,0))
-    img.paste(base, (0,0))
-    d = ImageDraw.Draw(img)
+        # Border Color Logic
+        border_col = (255, 255, 255)
+        if result == "GOAL": border_col = (0, 255, 127) # Spring Green
+        if result == "SAVED": border_col = (255, 68, 68) # Red
 
-    # 2. Add DiceBear Shapes for Background Texture
-    for _ in range(3):
-        shape_url = f"https://api.dicebear.com/9.x/shapes/png?seed={random.randint(1,999)}&size=300"
-        shape = get_robust_avatar(shape_url, "bg_shape")
-        if shape:
-            shape.putalpha(25) # Barely visible
-            img.paste(shape, (random.randint(-50, 400), random.randint(-50, 400)), shape)
+        # 2. Goal Area
+        gx1, gy1, gx2, gy2 = 120, 180, 580, 450
+        # Shadow/Depth
+        d.rectangle([gx1+5, gy1+5, gx2+5, gy2+5], fill=(0,0,0,80))
+        # Goal Frame Neon
+        d.rectangle([gx1, gy1, gx2, gy2], outline=(*border_col, 200), width=6)
+        # Net Pattern
+        for i in range(gx1, gx2, 20): d.line([i, gy1, i, gy2], fill=(255,255,255,30), width=1)
+        for i in range(gy1, gy2, 20): d.line([gx1, i, gx2, i], fill=(255,255,255,30), width=1)
 
-    # 3. Outer Card Border
-    border_col = "#FFD700" if result == "GOAL" else "#FFFFFF"
-    if result == "SAVED": border_col = "#FF4444"
-    d.rounded_rectangle([10, 10, W-10, H-10], radius=50, outline=border_col, width=6)
-
-    # 4. Neon Goal Post
-    gx1, gy1, gx2, gy2 = 120, 160, 580, 460
-    d.rectangle([gx1, gy1, gx2, gy2], outline="white", width=6)
-    # 3D Depth for Goalpost
-    d.rectangle([gx1-5, gy1-5, gx2+5, gy2+5], outline=(255,255,255,30), width=2)
-    # High-Quality Net
-    for i in range(gx1, gx2, 25): d.line([i, gy1, i, gy2], fill=(255,255,255,35), width=1)
-    for i in range(gy1, gy2, 25): d.line([gx1, i, gx2, i], fill=(255,255,255,35), width=1)
-
-    # 5. Position Logic
-    pos_map = {1: (gx1+30, gy1+80), 2: (W//2-85, gy1+80), 3: (gx2-190, gy1+80)}
-    ball_map = {1: (gx1+70, gy1+140), 2: (W//2-45, gy2-100), 3: (gx2-150, gy1+140)}
-
-    # 6. Bot (Goalkeeper) with Neon Circle
-    bot_av = get_robust_avatar(None, "GOALIE")
-    bot_av = bot_av.resize((170, 170))
-    b_xy = pos_map.get(bot_pos, (W//2-85, gy1+80))
-    
-    # Goalkeeper Ring
-    d.ellipse([b_xy[0]-5, b_xy[1]-5, b_xy[0]+175, b_xy[1]+175], outline="#FF4444", width=3)
-    
-    g_mask = Image.new('L', (170, 170), 0)
-    ImageDraw.Draw(g_mask).ellipse((0, 0, 170, 170), fill=255)
-    img.paste(bot_av, b_xy, g_mask)
-
-    # 7. Ball & Effects (Goal Dust/Smoke)
-    if user_pos:
-        bx, by = ball_map.get(user_pos)
+        # 3. Goalkeeper Visuals
+        gk_x, gk_y = POS_MAP[bot_pos or 2]["gk"]
+        # Diver blur effect if result is SAVED
+        gk_glow_col = (255, 255, 255, 100) if result != "SAVED" else (255, 0, 0, 150)
+        d.ellipse([gk_x-90, gk_y-90, gk_x+90, gk_y+90], outline=gk_glow_col, width=4)
         
-        # Effect: Smoke/Dust on Goal
-        if result == "GOAL":
-            smoke_layer = Image.new('RGBA', (W, H), (0,0,0,0))
-            sd = ImageDraw.Draw(smoke_layer)
-            for _ in range(15):
-                sx, sy = bx + random.randint(-40, 40), by + random.randint(-40, 40)
-                sr = random.randint(20, 60)
-                # Soft white/grey smoke particles
-                sd.ellipse([sx, sy, sx+sr, sy+sr], fill=(255, 255, 255, 60))
-            smoke_layer = smoke_layer.filter(ImageFilter.GaussianBlur(15))
-            img = Image.alpha_composite(img, smoke_layer)
-            d = ImageDraw.Draw(img) # Re-bind draw object
+        # Placeholder for Goalkeeper Avatar (Bot)
+        d.ellipse([gk_x-75, gk_y-75, gk_x+75, gk_y+75], fill=(40, 40, 50))
+        d.text((gk_x, gk_y), "GK", fill="white", anchor="mm")
 
-        ball = utils.get_emoji("⚽", size=90)
-        img.paste(ball, (bx, by), ball)
-
-    # 8. User DP with Legendary Ring
-    u_av = get_robust_avatar(user_av, username)
-    u_av = u_av.resize((140, 140))
-    u_mask = Image.new('L', (140, 140), 0)
-    ImageDraw.Draw(u_mask).ellipse((0, 0, 140, 140), fill=255)
-    
-    ux, uy = 40, 520
-    # The Triple Ring
-    d.ellipse([ux-8, uy-8, ux+148, uy+148], outline=(255, 215, 0, 80), width=10) # Outer Glow
-    d.ellipse([ux-3, uy-3, ux+143, uy+143], outline="#FFD700", width=4)        # Solid Gold
-    d.ellipse([ux+2, uy+2, ux+138, uy+138], outline="white", width=1)          # Inner Highlight
-    
-    img.paste(u_av, (ux, uy), u_mask)
-    utils.write_text(d, (ux+70, uy+165), username.upper(), size=24, align="center", col="white", shadow=True)
-
-    # 9. Final Overlay Text
-    if result != "VS":
-        overlay = Image.new('RGBA', (W, H), (0,0,0,160))
-        img = Image.alpha_composite(img, overlay)
-        d = ImageDraw.Draw(img)
-        res_col = "#00FF00" if result == "GOAL" else "#FF4444"
-        utils.write_text(d, (W//2, H//2 - 20), result, size=130, align="center", col=res_col, shadow=True)
-        # 3D "Dhuaan" particle effect on text
-        utils.write_text(d, (W//2, H//2 + 80), "STRIKE COMPLETE", size=30, align="center", col="white")
-
-    # Round corners for the whole card
-    mask = Image.new('L', (W, H), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0,0,W,H], radius=50, fill=255)
-    final = Image.new('RGBA', (W, H), (0,0,0,0))
-    final.paste(img, (0,0), mask)
-    
-    return final
-
-# ==========================================
-# ⚙️ HANDLER (Logic Preserved)
-# ==========================================
-
-def handle_command(bot, command, room_id, user, args, data):
-    cmd = command.lower().strip()
-    uid = str(data.get('userid', user))
-    av_url = data.get("avatar")
-
-    with games_lock:
-        game = penalty_games.get(room_id)
-
-    if cmd == "kick":
-        if game: return True
-        try:
-            bet = int(args[0]) if args and args[0].isdigit() else 500
-            if bet < 100:
-                bot.send_message(room_id, "❌ Min bet is 100 CHIPS")
-                return True
+        # 4. Action Logic (Ball & Trails)
+        if user_pos:
+            target_xy = POS_MAP[user_pos]["ball"]
             
-            add_game_result(uid, user, "penalty", -bet, False)
+            if result == "GOAL":
+                # Ball trail
+                PenaltyVisuals.draw_motion_trail(d, SHOOTER_POS, target_xy, (255, 255, 255))
+                # Celebration particles
+                for _ in range(30):
+                    px, py = random.randint(gx1, gx2), random.randint(gy1, gy2)
+                    d.point((px, py), fill=random.choice(["#white", "#FFD700", "#00FF7F"]))
+                # Net Impact Glow
+                img = PenaltyVisuals.draw_impact_glow(img, target_xy, (255, 255, 255))
             
-            with games_lock:
-                penalty_games[room_id] = {"uid": uid, "name": user, "av": av_url, "bet": bet, "time": time.time()}
-            
-            img = draw_penalty_board(user, av_url)
-            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"MATCH START"})
-            bot.send_message(room_id, f"⚽ @{user}, Shot kahan marna hai?\n1 (Left) | 2 (Center) | 3 (Right)")
-        except: pass
-        return True
+            # Draw Ball (⚽)
+            ball_size = 40
+            d.ellipse([target_xy[0]-ball_size, target_xy[1]-ball_size, 
+                       target_xy[0]+ball_size, target_xy[1]+ball_size], fill="white")
+            d.text(target_xy, "⚽", fill="black", anchor="mm", font_size=40)
 
-    if cmd in ["1", "2", "3"] and game:
-        if uid != game["uid"]: return False
-        
-        user_choice = int(cmd)
-        bot_choice = random.randint(1, 3)
-        
-        result = "GOAL" if user_choice != bot_choice else "SAVED"
-        win_amt = game["bet"] * 2 if result == "GOAL" else 0
-        
-        if win_amt > 0:
-            add_game_result(uid, game["name"], "penalty", win_amt, True)
-        
-        img = draw_penalty_board(game["name"], game["av"], result, user_choice, bot_choice)
-        bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":result})
-        
-        if result == "GOAL":
-            bot.send_message(room_id, f"🥅 **GOOOAAALLL!!!** @{game['name']} won {win_amt} CHIPS!")
-        else:
-            bot.send_message(room_id, f"🧤 **SAVED!** Better luck next time @{game['name']}.")
+        # 5. SAVED Specific Visuals (Darken overlay)
+        if result == "SAVED":
+            dark_ov = Image.new("RGBA", (W, H), (0,0,0,100))
+            img = Image.alpha_composite(img, dark_ov)
+            d = ImageDraw.Draw(img)
 
-        with games_lock: penalty_games.pop(room_id, None)
-        return True
+        # 6. Player Avatar Section (Bottom)
+        ux, uy = 80, 580
+        # Multi-ring border
+        d.ellipse([ux-70, uy-70, ux+70, uy+70], outline=GOLD, width=5)
+        d.ellipse([ux-62, uy-62, ux+62, uy+62], outline="white", width=2)
+        # Placeholder for user avatar
+        d.ellipse([ux-60, uy-60, ux+60, uy+60], fill=(60, 60, 80))
+        # Username
+        d.text((ux, uy+85), username.upper(), fill="white", anchor="mm")
 
-    if cmd == "stop" and game:
-        if uid == game["uid"] or user.lower() == "yasin":
-            with games_lock: penalty_games.pop(room_id, None)
-            bot.send_message(room_id, "🛑 Penalty Session Stopped.")
-        return True
+        # 7. Cinematic Result Overlay
+        if result != "VS":
+            res_col = "#00FF7F" if result == "GOAL" else "#FF4444"
+            # Text Shadow
+            d.text((W//2 + 4, H//2 + 4), result, fill=(0,0,0,150), anchor="mm", font_size=120)
+            # Main Text
+            d.text((W//2, H//2), result, fill=res_col, anchor="mm", font_size=120)
+            # Subtext
+            d.text((W//2, H//2 + 80), "STRIKE COMPLETE", fill="white", anchor="mm", font_size=25)
 
-    return False
+        # 8. Final Card Polish (Rounded edges)
+        mask = Image.new('L', (W, H), 0)
+        draw_mask = ImageDraw.Draw(mask)
+        draw_mask.rounded_rectangle([0, 0, W, H], radius=50, fill=255)
+        
+        final_img = Image.new("RGBA", (W, H), (0,0,0,0))
+        final_img.paste(img, (0,0), mask)
+        
+        # Soft Outer Glow
+        draw_glow = ImageDraw.Draw(final_img)
+        draw_glow.rounded_rectangle([2, 2, W-2, H-2], radius=50, outline=(*border_col, 100), width=4)
+        
+        return final_img
 
-# Cleanup
-def auto_clean():
-    while True:
-        time.sleep(30)
-        now = time.time()
-        with games_lock:
-            for rid in list(penalty_games.keys()):
-                if now - penalty_games[rid]["time"] > 60:
-                    penalty_games.pop(rid, None)
-threading.Thread(target=auto_clean, daemon=True).start()
+# --- EXAMPLE USAGE ---
+# visual = PenaltyVisuals.create_card("Striker07", None, "GOAL", user_pos=3, bot_pos=1)
+# visual.show()
