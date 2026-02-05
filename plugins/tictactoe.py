@@ -4,20 +4,20 @@ import threading
 import traceback
 import sys
 import os
-from PIL import ImageDraw
+import uuid
+from PIL import Image, ImageDraw, ImageFilter
 
-# --- UTILS IMPORT (The Artist & Network Manager) ---
+# --- UTILS & DB IMPORTS ---
 try:
     import utils
 except ImportError:
-    print("[TicTacToe] Error: utils.py not found!")
+    print("[TicTacToe] Error: utils.py missing!")
 
-# --- DB IMPORT (Economy) ---
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     from db import add_game_result
 except Exception as e:
-    print(f"DB Import Error: {e}")
+    print(f"DB Error: {e}")
 
 # --- GLOBAL STATE ---
 games = {} 
@@ -27,343 +27,219 @@ BOT_INSTANCE = None
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[TicTacToe] Pro Version Loaded.")
+    print("[TicTacToe] Smart AI & Chips Economy System Ready.")
 
-# --- CLEANUP THREAD (Background Garbage Collector) ---
-def game_cleanup_loop():
-    while True:
-        time.sleep(10)
-        now = time.time()
-        to_remove = []
-        
-        # Check for inactive games
-        with games_lock:
-            for room_id, game in games.items():
-                if now - game.last_interaction > 90:
-                    to_remove.append(room_id)
-        
-        # Remove and Notify
-        for room_id in to_remove:
-            if BOT_INSTANCE:
-                try: BOT_INSTANCE.send_message(room_id, "⌛ Game Timeout! Cleaning up...")
-                except: pass
-            with games_lock:
-                if room_id in games: del games[room_id]
+# ==========================================
+# 🎨 GRAPHICS ENGINE (Board & Winner Card)
+# ==========================================
 
-if threading.active_count() < 10: 
-    threading.Thread(target=game_cleanup_loop, daemon=True).start()
+def draw_premium_board(board, p1_name, p2_name, turn, pool):
+    W, H = 600, 750
+    # 1. Midnight Gradient Background
+    img = utils.get_gradient(W, H, (10, 15, 30), (30, 10, 50))
+    d = ImageDraw.Draw(img, 'RGBA')
 
-# --- 🎨 VISUALS (Powered by UTILS) ---
+    # 2. Header Panel (Glassmorphism)
+    d.rounded_rectangle([40, 30, 560, 150], radius=30, fill=(0,0,0,160), outline="#EC4899", width=3)
+    utils.write_text(d, (W//2, 65), "NEON TIC-TAC-TOE", size=35, align="center", col="#FBB03B", shadow=True)
+    utils.write_text(d, (W//2, 115), f"🎰 POOL: {pool} CHIPS", size=25, align="center", col="#2ecc71")
 
-def draw_pro_board(board_state, p1_name, p2_name, turn):
-    """
-    Creates a High-Quality Game Board using Utils Gradient & Text Engine.
-    """
-    W, H = 400, 500  # Extra height for status
-    
-    # 1. Background (Dark Blue-Purple Gradient)
-    img = utils.get_gradient(W, H, (20, 20, 30), (10, 10, 15))
-    d = ImageDraw.Draw(img)
-    
-    # 2. Header (Status)
-    current_player = p1_name if turn == 'X' else p2_name
-    utils.write_text(d, (W//2, 30), f"Turn: {current_player}", size=24, align="center", col="#FFD700", shadow=True)
-    utils.write_text(d, (W//2, 470), "Type 1-9 to play", size=16, align="center", col="#8888AA", shadow=False)
-
-    # 3. The Grid
-    start_y = 70
-    size = 360 # Grid size
-    cell = size // 3
-    margin = (W - size) // 2
-    
-    line_col = (100, 100, 120)
+    # 3. Smart Neon Grid
+    grid_sz = 450
+    cell = grid_sz // 3
+    mx, my = (W - grid_sz)//2, 200
     for i in range(1, 3):
-        # Vertical
-        d.line([(margin + cell*i, start_y), (margin + cell*i, start_y + size)], fill=line_col, width=5)
-        # Horizontal
-        d.line([(margin, start_y + cell*i), (margin + size, start_y + cell*i)], fill=line_col, width=5)
+        d.line([(mx + cell*i, my), (mx + cell*i, my + grid_sz)], fill="#EC4899", width=6)
+        d.line([(mx, my + cell*i), (mx + grid_sz, my + cell*i)], fill="#EC4899", width=6)
 
-    # 4. Draw X and O
+    # 4. Symbols
     for i in range(9):
-        row, col = i // 3, i % 3
-        x = margin + col * cell
-        y = start_y + row * cell
-        cx, cy = x + cell // 2, y + cell // 2
-        val = board_state[i]
+        r, c = i // 3, i % 3
+        cx, cy = mx + c*cell + cell//2, my + r*cell + cell//2
+        symbol = board[i]
+        if symbol == 'X':
+            s = 40
+            d.line([(cx-s, cy-s), (cx+s, cy+s)], fill="#ff4d4d", width=14)
+            d.line([(cx+s, cy-s), (cx-s, cy+s)], fill="#ff4d4d", width=14)
+        elif symbol == 'O':
+            s = 45
+            d.ellipse([cx-s, cy-s, cx+s, cy+s], outline="#4facfe", width=14)
+        else:
+            utils.write_text(d, (cx, cy), str(i+1), size=30, col=(255,255,255,30), align="center")
 
-        if val is None:
-            # Subtle number hint
-            utils.write_text(d, (cx, cy), str(i+1), size=40, col=(50, 50, 60), align="center", shadow=False)
-        elif val == 'X':
-            # Draw Red Cross
-            off = 35
-            d.line([(x+off, y+off), (x+cell-off, y+cell-off)], fill=(255, 60, 60), width=12)
-            d.line([(x+cell-off, y+off), (x+off, y+cell-off)], fill=(255, 60, 60), width=12)
-        elif val == 'O':
-            # Draw Blue Circle
-            off = 35
-            d.ellipse([(x+off, y+off), (x+cell-off, y+cell-off)], outline=(60, 150, 255), width=12)
-
+    utils.write_text(d, (W//2, 700), f"👉 Turn: {p1_name if turn == 'X' else p2_name}", size=28, align="center", col="white")
     return img
 
-def draw_winner_card(winner_name, winner_symbol, avatar_url=None):
-    """
-    Creates a Professional Winner Card using Utils Assets.
-    """
-    W, H = 500, 300
+def draw_victory_card(winner_name, chips_won, avatar_url):
+    W, H = 600, 600 # 1:1 Ratio
+    img = utils.get_gradient(W, H, (15, 12, 41), (48, 43, 99))
+    d = ImageDraw.Draw(img, 'RGBA')
     
-    # 1. Background (Victory Gradient)
-    if winner_symbol == 'X':
-        bg = utils.get_gradient(W, H, (60, 10, 10), (20, 5, 5)) # Red tint
-    elif winner_symbol == 'O':
-        bg = utils.get_gradient(W, H, (10, 10, 60), (5, 5, 20)) # Blue tint
-    else:
-        bg = utils.get_gradient(W, H, (40, 40, 40), (20, 20, 20)) # Grey (Draw)
+    # DiceBear Decorative Shapes Background
+    for _ in range(3):
+        seed = random.randint(1, 9999)
+        shape_url = f"https://api.dicebear.com/9.x/shapes/png?seed={seed}&size=250&backgroundColor=transparent"
+        shape_img = utils.get_image(shape_url)
+        if shape_img:
+            shape_img.putalpha(45)
+            img.paste(shape_img, (random.randint(0,350), random.randint(0,350)), shape_img)
 
-    d = ImageDraw.Draw(bg)
-
-    # 2. Add Sticker (Trophy or Bot)
-    sticker = utils.get_sticker("win", size=100)
-    if sticker:
-        bg.paste(sticker, (380, 20), sticker)
-
-    # 3. Avatar (Circular)
-    cx, cy = 100, 150
-    if avatar_url:
-        av = utils.get_circle_avatar(avatar_url, size=140)
-        if av:
-            bg.paste(av, (cx-70, cy-70), av)
-            # Gold Ring border
-            d.ellipse([(cx-70, cy-70), (cx+70, cy+70)], outline="#FFD700", width=4)
-    else:
-        # Fallback Avatar
-        d.ellipse([(cx-70, cy-70), (cx+70, cy+70)], fill=(50,50,50), outline="white", width=3)
-        initial = winner_name[0].upper()
-        utils.write_text(d, (cx, cy), initial, size=80, align="center")
-
-    # 4. Text Info
-    utils.write_text(d, (200, 80), "WINNER!", size=50, col="#FFD700", shadow=True)
-    utils.write_text(d, (200, 150), f"@{winner_name}", size=35, col="white", shadow=True)
+    # Avatar with Glowing Neon Ring
+    if not avatar_url:
+        avatar_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={winner_name}&size=300"
     
-    if winner_symbol == 'X':
-        utils.write_text(d, (200, 220), "Team Red (X)", size=20, col="#ff6b6b")
-    else:
-        utils.write_text(d, (200, 220), "Team Blue (O)", size=20, col="#4facfe")
+    avatar = utils.get_image(avatar_url)
+    if avatar:
+        avatar = avatar.resize((280, 280), Image.Resampling.LANCZOS)
+        mask = Image.new('L', (280, 280), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, 280, 280), fill=255)
+        cx, cy = W//2, 220
+        r = 145
+        d.ellipse([cx-r-10, cy-r-10, cx+r+10, cy+r+10], outline=(236, 72, 153, 100), width=15)
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], outline="#EC4899", width=8)
+        img.paste(avatar, (cx-140, cy-140), mask)
 
-    return bg
+    # Champion Branding
+    d.rounded_rectangle([120, 390, 480, 455], radius=20, fill=(0,0,0,180), outline="#FBB03B", width=3)
+    utils.write_text(d, (W//2, 423), "🎉 CHAMPION 🎉", size=32, align="center", col="#FBB03B", shadow=True)
+    utils.write_text(d, (W//2, 500), winner_name.upper(), size=50, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 560), f"WON {chips_won} CHIPS", size=30, align="center", col="#2ecc71")
+    return img
 
-# --- GAME LOGIC ---
-class TicTacToe:
-    def __init__(self, room_id, creator_id, creator_name, creator_avatar=None):
+# ==========================================
+# 🧠 SMART AI & LOGIC
+# ==========================================
+
+def get_smart_move(board):
+    empty = [i for i, x in enumerate(board) if x is None]
+    for m in empty:
+        board[m] = 'O'
+        if check_winner(board) == 'O': 
+            board[m] = None; return m
+        board[m] = None
+    for m in empty:
+        board[m] = 'X'
+        if check_winner(board) == 'X': 
+            board[m] = None; return m
+        board[m] = None
+    if 4 in empty: return 4
+    corners = [i for i in [0, 2, 6, 8] if i in empty]
+    if corners: return random.choice(corners)
+    return random.choice(empty)
+
+def check_winner(b):
+    win_pos = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
+    for a, b1, c in win_pos:
+        if b[a] and b[a] == b[b1] == b[c]: return b[a]
+    if None not in b: return 'draw'
+    return None
+
+class TicTacToeGame:
+    def __init__(self, room_id, p1_id, p1_name, p1_av):
         self.room_id = room_id
-        # Tracking IDs & Avatars
-        self.p1_id = creator_id; self.p1_name = creator_name; self.p1_avatar = creator_avatar
-        self.p2_id = None; self.p2_name = None; self.p2_avatar = None
-        
+        self.p1_id = p1_id; self.p1_name = p1_name; self.p1_av = p1_av
+        self.p2_id = self.p2_name = self.p2_av = None
         self.board = [None]*9
-        self.turn = 'X'
-        self.state = 'setup_mode'
-        self.mode = None
-        self.bet = 0
+        self.turn = 'X'; self.bet = 0; self.mode = None; self.state = 'lobby'
         self.last_interaction = time.time()
-        
     def touch(self): self.last_interaction = time.time()
-    
-    def check_win(self):
-        wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
-        for a, b, c in wins:
-            if self.board[a] and self.board[a] == self.board[b] == self.board[c]:
-                return self.board[a]
-        if None not in self.board: return 'draw'
-        return None
-    
-    def bot_move(self):
-        empty = [i for i, x in enumerate(self.board) if x is None]
-        if not empty: return None
-        # Win or Block Logic
-        for m in empty:
-            self.board[m] = 'O'; 
-            if self.check_win() == 'O': self.board[m] = None; return m
-            self.board[m] = None
-        for m in empty:
-            self.board[m] = 'X'; 
-            if self.check_win() == 'X': self.board[m] = None; return m
-            self.board[m] = None
-        if 4 in empty: return 4
-        return random.choice(empty)
 
-# --- COMMAND HANDLER ---
+# ==========================================
+# 📨 HANDLERS
+# ==========================================
+
+def handle_end(bot, rid, g, result):
+    win_msg = ""; winner_uid = None; winner_name = ""; winner_av = ""; reward = 0
+    if result == 'draw':
+        win_msg = "🤝 **DRAW!** Chips refunded."
+        if g.mode == 2:
+            add_game_result(g.p1_id, g.p1_name, "tictactoe", g.bet, False)
+            add_game_result(g.p2_id, g.p2_name, "tictactoe", g.bet, False)
+        bot.send_message(rid, win_msg)
+    else:
+        winner_uid = g.p1_id if result == 'X' else g.p2_id
+        winner_name = g.p1_name if result == 'X' else g.p2_name
+        winner_av = g.p1_av if result == 'X' else g.p2_av
+        if g.mode == 1:
+            if winner_uid == "BOT":
+                bot.send_message(rid, "🤖 **Smart Bot Wins!** Better luck next time yasin.")
+            else: reward = 500
+        else: reward = g.bet * 2
+
+        if winner_uid != "BOT":
+            add_game_result(winner_uid, winner_name, "tictactoe", reward, True)
+            def victory():
+                img = draw_victory_card(winner_name, reward, winner_av)
+                url = utils.upload(bot, img)
+                if url: bot.send_json({"handler":"chatroommessage","roomid":rid,"type":"image","url":url,"text":f"Winner: @{winner_name}"})
+            utils.run_in_bg(victory)
+    with games_lock:
+        if rid in games: del games[rid]
+
 def handle_command(bot, command, room_id, user, args, data):
-    try:
-        global games, BOT_INSTANCE
-        if BOT_INSTANCE is None: BOT_INSTANCE = bot
-        
-        # User Data Extraction
-        user_id = data.get('userid', user)
-        avatar_file = data.get("avatar")
-        # Howdies Avatar URL format
-        avatar_url = f"https://cdn.howdies.app/avatar?image={avatar_file}" if avatar_file else None
-        
-        cmd_clean = command.lower().strip()
+    cmd = command.lower().strip(); uid = str(data.get('userid', user))
+    av_id = data.get("avatar")
+    av_url = f"https://cdn.howdies.app/avatar?image={av_id}" if av_id else None
 
-        # THREAD-SAFE ACCESS
-        with games_lock: 
-            current_game = games.get(room_id)
+    with games_lock: g = games.get(room_id)
+    if cmd == "tic":
+        if g: return True
+        with games_lock: games[room_id] = TicTacToeGame(room_id, uid, user, av_url)
+        bot.send_message(room_id, f"🎮 **Neon Tic-Tac-Toe**\n@{user}, choose:\n1️⃣ Vs Bot (Free | Win 500)\n2️⃣ Multiplayer (Bet Required)")
+        return True
+    if not g: return False
+    if cmd == "stop" and (uid == g.p1_id or user.lower() == "yasin"):
+        with games_lock: del games[room_id]
+        bot.send_message(room_id, "🛑 Game Stopped.")
+        return True
+    if g.state == 'lobby' and uid == g.p1_id:
+        if cmd == "1":
+            g.mode = 1; g.p2_name = "Smart Bot"; g.p2_id = "BOT"; g.state = 'playing'; g.touch()
+            def start():
+                img = draw_premium_board(g.board, g.p1_name, "Smart Bot", 'X', 500)
+                bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Start"})
+            utils.run_in_bg(start); return True
+        if cmd == "2":
+            g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 Bet amount? (e.g. `!bet 500`)"); return True
+    if g.state == 'betting' and uid == g.p1_id and cmd == "bet":
+        try:
+            amt = int(args[0])
+            if amt < 100: return True
+            g.bet = amt; g.state = 'waiting'; g.touch(); add_game_result(uid, user, "tictactoe", -amt, False)
+            bot.send_message(room_id, f"⚔️ @{user} is waiting! Bet: {amt} Chips. Type `!join`.")
+        except: pass
+        return True
+    if g.state == 'waiting' and cmd == "join" and uid != g.p1_id:
+        g.p2_id = uid; g.p2_name = user; g.p2_av = av_url; g.state = 'playing'; g.touch(); add_game_result(uid, user, "tictactoe", -g.bet, False)
+        def vs():
+            img = draw_premium_board(g.board, g.p1_name, g.p2_name, 'X', g.bet*2)
+            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"VS"})
+        utils.run_in_bg(vs); return True
+    if g.state == 'playing' and cmd.isdigit():
+        idx = int(cmd)-1
+        if not (0<=idx<=8) or g.board[idx] or uid != (g.p1_id if g.turn == 'X' else g.p2_id): return False
+        g.board[idx] = g.turn; g.touch(); res = check_winner(g.board)
+        if res: handle_end(bot, room_id, g, res); return True
+        g.turn = 'O' if g.turn == 'X' else 'X'
+        if g.mode == 1 and g.turn == 'O':
+            b_move = get_smart_move(g.board); g.board[b_move] = 'O'; res = check_winner(g.board)
+            if res: handle_end(bot, room_id, g, res); return True
+            g.turn = 'X'
+        def update():
+            img = draw_premium_board(g.board, g.p1_name, g.p2_name, g.turn, (500 if g.mode==1 else g.bet*2))
+            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"Move"})
+        utils.run_in_bg(update); return True
+    return False
 
-        # 1. START NEW GAME
-        if cmd_clean == "tic":
-            if current_game:
-                bot.send_message(room_id, "⚠️ Game running! Type 'stop' to end.")
-                return True
-            
-            with games_lock: 
-                games[room_id] = TicTacToe(room_id, user_id, user, avatar_url)
-            
-            bot.send_message(room_id, f"🎮 **Tic-Tac-Toe Pro**\n@{user}, Choose Mode:\n1️⃣ Single Player (vs Bot)\n2️⃣ Multiplayer (1v1)")
-            return True
-
-        # 2. STOP COMMAND
-        if cmd_clean == "stop" and current_game:
-            with games_lock: del games[room_id]
-            bot.send_message(room_id, "🛑 Game Stopped.")
-            return True
-
-        # 3. GAMEPLAY LOGIC
-        if current_game:
-            game = current_game
-            is_p1 = str(user_id) == str(game.p1_id)
-            
-            # PHASE 1: MODE SELECTION
-            if game.state == 'setup_mode' and is_p1:
-                if cmd_clean == "1":
-                    game.mode = 1; game.p2_name = "Bot"; game.p2_id = "BOT"; game.state = 'setup_bet'; game.touch()
-                    bot.send_message(room_id, "💰 Choose Bet:\n1️⃣ Free (Win 500 XP)\n2️⃣ Bet 100 Coins (Win 700)")
-                    return True
-                elif cmd_clean == "2":
-                    game.mode = 2; game.state = 'setup_bet'; game.touch()
-                    bot.send_message(room_id, "💰 Choose Bet:\n1️⃣ Friendly (No Coins)\n2️⃣ Bet 100 Coins")
-                    return True
-            
-            # PHASE 2: BETTING
-            elif game.state == 'setup_bet' and is_p1:
-                if cmd_clean in ["1", "2"]:
-                    game.bet = 0 if cmd_clean == "1" else 100; game.touch()
-                    
-                    # Deduct Entry Fee (P1)
-                    if game.bet > 0: 
-                        add_game_result(game.p1_id, game.p1_name, "tictactoe", -game.bet, is_win=False)
-                    
-                    if game.mode == 1:
-                        game.state = 'playing'
-                        # Use UTILS for fast upload
-                        img = draw_pro_board(game.board, game.p1_name, "Bot", game.turn)
-                        link = utils.upload(bot, img)
-                        
-                        # Note: DM removed as requested
-                        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Game Start"})
-                    else:
-                        game.state = 'waiting_join'
-                        bot.send_message(room_id, f"⚔️ **Lobby Open!**\nEntry: {game.bet} Coins\nType **'join'** to play vs @{game.p1_name}")
-                    return True
-            
-            # PHASE 3: JOINING
-            elif game.state == 'waiting_join':
-                if cmd_clean in ["j", "join"]:
-                    if is_p1: return True # Self join prevention
-                    
-                    game.p2_id = user_id; game.p2_name = user; game.p2_avatar = avatar_url
-                    game.touch()
-                    
-                    # Deduct Entry Fee (P2)
-                    if game.bet > 0: 
-                        add_game_result(game.p2_id, game.p2_name, "tictactoe", -game.bet, is_win=False)
-                    
-                    game.state = 'playing'
-                    img = draw_pro_board(game.board, game.p1_name, game.p2_name, game.turn)
-                    link = utils.upload(bot, img)
-                    
-                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "VS"})
-                    return True
-            
-            # PHASE 4: MOVING (1-9)
-            elif game.state == 'playing':
-                if cmd_clean.isdigit() and 1 <= int(cmd_clean) <= 9:
-                    idx = int(cmd_clean) - 1
-                    
-                    # Turn Validation
-                    curr_id = game.p1_id if game.turn == 'X' else game.p2_id
-                    if str(user_id) != str(curr_id): return False # Not your turn
-                    
-                    if game.board[idx]: 
-                        bot.send_message(room_id, "🚫 Space Occupied!")
-                        return True
-                    
-                    game.touch()
-                    game.board[idx] = game.turn
-                    win_result = game.check_win()
-                    
-                    # --- WIN/DRAW HANDLER ---
-                    if win_result:
-                        # Determine Winner Data
-                        if win_result == 'draw':
-                            bot.send_message(room_id, "🤝 **Draw Game!** Money Refunded.")
-                            if game.bet > 0:
-                                add_game_result(game.p1_id, game.p1_name, "tictactoe", game.bet, False)
-                                if game.mode == 2: 
-                                    add_game_result(game.p2_id, game.p2_name, "tictactoe", game.bet, False)
-                        else:
-                            # Winner ID/Name mapping
-                            w_id = game.p1_id if win_result=='X' else game.p2_id
-                            w_nm = game.p1_name if win_result=='X' else game.p2_name
-                            w_av = game.p1_avatar if win_result=='X' else game.p2_avatar
-                            
-                            # Reward Logic
-                            reward = 0
-                            if game.mode == 1: reward = 500 if game.bet == 0 else 700
-                            else: reward = game.bet * 2 if game.bet > 0 else 0
-                            
-                            # DB Update
-                            if reward > 0: add_game_result(w_id, w_nm, "tictactoe", reward, is_win=True)
-                            else: add_game_result(w_id, w_nm, "tictactoe", 0, is_win=True)
-                            
-                            # GENERATE PRO WINNER CARD (Using Utils)
-                            card = draw_winner_card(w_nm, win_result, w_av)
-                            clink = utils.upload(bot, card)
-                            
-                            if clink: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": clink, "text": "Win"})
-                            bot.send_message(room_id, f"🏆 **Victory!** @{w_nm} takes the crown!")
-
-                        # CLEANUP
-                        with games_lock: del games[room_id]
-                        return True
-
-                    # --- NEXT TURN ---
-                    game.turn = 'O' if game.turn == 'X' else 'X'
-                    
-                    # BOT AI MOVE
-                    if game.mode == 1 and game.turn == 'O':
-                        time.sleep(1) # Fake thinking
-                        b_idx = game.bot_move()
-                        if b_idx is not None:
-                            game.board[b_idx] = 'O'
-                            if game.check_win() == 'O':
-                                # Bot Wins
-                                img = draw_pro_board(game.board, game.p1_name, "Bot", 'O')
-                                link = utils.upload(bot, img)
-                                if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "BotWin"})
-                                bot.send_message(room_id, "🤖 **Bot Wins!** Better luck next time.")
-                                with games_lock: del games[room_id]
-                                return True
-                            game.turn = 'X'
-                    
-                    # Redraw Board for Next Turn
-                    p2_disp = "Bot" if game.mode == 1 else game.p2_name
-                    img = draw_pro_board(game.board, game.p1_name, p2_disp, game.turn)
-                    link = utils.upload(bot, img)
-                    if link: bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": link, "text": "Turn"})
-                    return True
-        return False
-    except Exception as e:
-        bot.send_message(room_id, f"⚠️ Fatal Error: {str(e)}")
-        traceback.print_exc()
-        return False
+# Cleanup Thread
+def cleanup():
+    while True:
+        time.sleep(20); now = time.time(); to_del = []
+        with games_lock:
+            for rid, g in games.items():
+                if now - g.last_interaction > 90: to_del.append(rid)
+        for rid in to_del:
+            if BOT_INSTANCE: BOT_INSTANCE.send_message(rid, "⌛ Game Expired.")
+            with games_lock:
+                if rid in games: del games[rid]
+threading.Thread(target=cleanup, daemon=True).start()
