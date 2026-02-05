@@ -1,18 +1,17 @@
 import os
-import io
 import sys
 import time
 import uuid
 import random
 import requests
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageDraw
 import utils
 import db
 
-# --- STATE MANAGEMENT ---
-pending_requests = {} 
+# --- GLOBAL MEMORY FOR PROFILE REQUESTS ---
+pending_profiles = {} 
 
-# --- UNICODE FONTS (For Chat Messages) ---
+# --- FONT CONVERTERS (Standard Unicode - No Boxes) ---
 def chat_bold(text):
     try:
         n = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -28,85 +27,84 @@ def chat_small(text):
     except: return text
 
 def setup(bot):
-    print("[Economy] Stable Plugin Loaded.")
+    print("[Economy] Premium System Active.")
 
 # ==========================================
-# 🎨 PREMIUM TTF CARD RENDERER
+# 🎨 TTF CARD RENDERER (1:1 Ratio)
 # ==========================================
 
-def draw_profile_card(data, chips, wins):
+def draw_visual_card(data, chips, wins):
     try:
         W, H = 600, 600
         username = str(data.get("username", "Unknown"))
-        bio = str(data.get("status", "No Bio Set"))[:45]
+        status = str(data.get("status", "Available"))[:40]
         followers = str(data.get("followersCount", 0))
         following = str(data.get("followingCount", 0))
         avatar_id = data.get("avatar")
 
-        img = utils.get_gradient(W, H, (10, 10, 26), (38, 20, 72))
+        # 1. Background
+        img = utils.get_gradient(W, H, (10, 10, 20), (40, 20, 60))
         d = ImageDraw.Draw(img, 'RGBA')
 
-        for _ in range(5):
-            shape = utils.get_image(f"https://api.dicebear.com/9.x/shapes/png?seed={uuid.uuid4()}&size=200")
-            if shape:
-                shape.putalpha(25)
-                img.paste(shape, (random.randint(-50, 500), random.randint(-50, 500)), shape)
+        # 2. Glass Panel
+        d.rounded_rectangle([30, 30, 570, 570], radius=40, fill=(0, 0, 0, 150), outline=(255, 255, 255, 50), width=2)
 
-        d.rounded_rectangle([30, 30, 570, 570], radius=45, fill=(0, 0, 0, 140), outline=(255, 255, 255, 40), width=2)
-
+        # 3. Avatar with Neon Ring
         avatar_url = f"https://cdn.howdies.app/avatar?image={avatar_id}" if avatar_id else None
-        av_img = utils.get_circle_avatar(avatar_url, size=200)
+        av_img = utils.get_circle_avatar(avatar_url, size=180)
         
-        cx, cy = W//2, 150
-        d.ellipse([cx-108, cy-108, cx+108, cy+108], outline=(0, 255, 255, 60), width=12)
-        d.ellipse([cx-102, cy-102, cx+102, cy+102], outline="#00FFFF", width=5)
+        cx, cy = W//2, 140
+        d.ellipse([cx-95, cy-95, cx+95, cy+95], outline="#00FFFF", width=6) # Cyan Ring
         
         if av_img:
-            img.paste(av_img, (cx-100, cy-100), av_img)
+            img.paste(av_img, (cx-90, cy-90), av_img)
 
-        utils.write_text(d, (W//2, 275), username.upper(), size=45, align="center", col="white", shadow=True)
-        utils.write_text(d, (W//2, 325), bio, size=20, align="center", col="#00E5FF")
+        # 4. Text Rendering (TTF Only - NO UNICODE IN IMAGE)
+        utils.write_text(d, (W//2, 270), username.upper(), size=45, align="center", col="white", shadow=True)
+        utils.write_text(d, (W//2, 315), status, size=22, align="center", col="#00FFFF")
 
-        d.rounded_rectangle([70, 375, 530, 460], radius=20, fill=(255, 255, 255, 15))
-        utils.write_text(d, (100, 418), "CHIPS BALANCE", size=18, align="left", col="#BBBBBB")
-        utils.write_text(d, (500, 418), f"{chips:,}", size=34, align="right", col="#FFD700")
+        # 5. Chips Balance Box
+        d.rounded_rectangle([60, 370, 540, 450], radius=20, fill=(255, 255, 255, 20))
+        utils.write_text(d, (100, 410), "CHIPS BALANCE", size=18, align="left", col="#AAAAAA")
+        utils.write_text(d, (500, 410), f"{chips:,}", size=32, align="right", col="#FFD700")
 
-        stat_y = 500
-        utils.write_text(d, (150, stat_y), "FOLLOWERS", size=15, align="center", col="#999999")
-        utils.write_text(d, (150, stat_y+30), followers, size=25, align="center", col="white")
-        utils.write_text(d, (300, stat_y), "FOLLOWING", size=15, align="center", col="#999999")
-        utils.write_text(d, (300, stat_y+30), following, size=25, align="center", col="white")
-        utils.write_text(d, (450, stat_y), "GAME WINS", size=15, align="center", col="#999999")
-        utils.write_text(d, (450, stat_y+30), str(wins), size=25, align="center", col="#00FF7F")
+        # 6. Bottom Stats
+        utils.write_text(d, (150, 500), "FOLLOWERS", size=16, align="center", col="#999999")
+        utils.write_text(d, (150, 530), followers, size=24, align="center", col="white")
+        
+        utils.write_text(d, (450, 500), "GAME WINS", size=16, align="center", col="#999999")
+        utils.write_text(d, (450, 530), str(wins), size=24, align="center", col="#00FF7F")
 
         return img
     except Exception as e:
-        print(f"Render Error: {e}")
+        print(f"[Economy] Render Error: {e}")
         return None
 
 # ==========================================
-# ⚙️ SYSTEM HANDLERS
+# ⚙️ HANDLERS
 # ==========================================
 
 def handle_system_message(bot, data):
-    handler = data.get("handler")
-    if handler == "profile":
-        username = data.get("username")
-        if username in pending_requests:
-            room_id = pending_requests.pop(username)
+    # Yeh tab chalega jab server profile data bhejega
+    if data.get("handler") == "profile":
+        uname = data.get("username")
+        if uname in pending_profiles:
+            room_id = pending_profiles.pop(uname)
             
             try:
+                # DB Stats Fetch
                 conn = db.get_connection()
                 cur = conn.cursor()
                 ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
-                cur.execute(f"SELECT global_score, wins FROM users WHERE username = {ph}", (username,))
+                cur.execute(f"SELECT global_score, wins FROM users WHERE username = {ph}", (uname,))
                 row = cur.fetchone()
                 conn.close()
                 
                 chips = row[0] if row else 0
                 wins = row[1] if row else 0
                 
-                img = draw_profile_card(data, chips, wins)
+                # Render and Upload
+                img = draw_visual_card(data, chips, wins)
                 url = utils.upload(bot, img)
                 if url:
                     bot.send_json({
@@ -114,20 +112,19 @@ def handle_system_message(bot, data):
                         "roomid": room_id,
                         "type": "image",
                         "url": url,
-                        "text": f"Profile of @{username}"
+                        "text": f"Profile of @{uname}"
                     })
-            except Exception as e:
-                print(f"System Message Error: {e}")
+            except: pass
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
-    user_id = str(data.get('userid', user))
-    ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
-
-    # 1. PROFILE / STATS / SCORE
-    if cmd in ["profile", "stats", "score"]:
+    user_lower = user.lower()
+    
+    # 1. PROFILE / SCORE / STATS
+    if cmd in ["profile", "score", "stats"]:
         target = args[0].replace("@", "") if args else user
-        pending_requests[target] = room_id
+        pending_profiles[target] = room_id
+        # Request data from server
         bot.send_json({
             "handler": "profile",
             "id": uuid.uuid4().hex,
@@ -145,30 +142,30 @@ def handle_command(bot, command, room_id, user, args, data):
             conn.close()
             
             msg = f"🏆 {chat_bold('GLOBAL RANKING')} 🏆\n"
-            msg += "──────────────\n"
+            msg += "──────────────────\n"
             for i, (name, score) in enumerate(rows):
                 medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "🔹"
                 msg += f"{medal} {chat_small(name)} • {score:,}\n"
-            msg += "──────────────"
+            msg += "──────────────────"
             bot.send_message(room_id, msg)
-            return True
-        except: return True
+        except: pass
+        return True
 
-    # 3. HELP COMMAND
+    # 3. HELP
     if cmd == "help" and args and args[0].lower() == "score":
-        help_msg =  "📖 ECONOMY HELP\n"
+        help_msg = f"📖 {chat_bold('ECONOMY HELP')}\n"
         help_msg += "━━━━━━━━━━━━━━━━━━\n"
-        help_msg += f"💰 !score : Profile Card (HD Image)\n"
-        help_msg += f"🏆 !global : Top 10 Chip Holders\n"
-        if user.lower() == "yasin":
+        help_msg += f"💰 !score : Premium Card\n"
+        help_msg += f"🏆 !global : Rankings\n"
+        if user_lower == "yasin":
             help_msg += f"\n👑 MASTER:\n"
             help_msg += f"🔹 !set @user [amt]\n"
             help_msg += f"🔹 !reset @user\n"
         bot.send_message(room_id, help_msg)
         return True
 
-    # 4. ADMIN: SET
-    if cmd == "set" and user.lower() == "yasin" and len(args) >= 2:
+    # 4. MASTER: SET
+    if cmd == "set" and user_lower == "yasin" and len(args) >= 2:
         try:
             target = args[0].replace("@", "")
             amt = int(args[1])
