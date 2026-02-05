@@ -86,26 +86,43 @@ class HighPerformanceUtils:
             print(f"[Utils] Download Error: {e}")
         return None
 
-    def upload_image_fast(self, image_bytes, token, user_id, file_type='png'):
-        """High-Performance Upload using Session Pool"""
+    def upload_image_fast(self, image_data, token, user_id, file_type='png'):
+        """High-Performance Upload using Session Pool - CRASH PROOF VERSION"""
         import io
         
         # 🔥 CRITICAL SAFETY CHECK
-        if image_bytes is None:
+        if image_data is None:
             print("[Utils] Error: Upload cancelled (Image data is None).")
             return None
 
         try:
-            # Convert PIL to Bytes if needed
-            if not isinstance(image_bytes, (bytes, bytearray)):
+            final_bytes = None
+
+            # 1. Agar ye PIL Image hai (Standard plugins ke liye)
+            if isinstance(image_data, Image.Image):
                 img_byte_arr = io.BytesIO()
-                image_bytes.save(img_byte_arr, format=file_type.upper())
-                image_bytes = img_byte_arr.getvalue()
+                image_data.save(img_byte_arr, format=file_type.upper())
+                final_bytes = img_byte_arr.getvalue()
+            
+            # 2. Agar ye pehle se BytesIO hai (Gift Shop fix)
+            elif isinstance(image_data, io.BytesIO):
+                final_bytes = image_data.getvalue()
+            
+            # 3. Agar ye Raw Bytes hai
+            elif isinstance(image_data, (bytes, bytearray)):
+                final_bytes = image_data
+            
+            else:
+                print(f"[Utils] Error: Unsupported image type {type(image_data)}")
+                return None
 
             url = "https://api.howdies.app/api/upload"
             mime = 'image/gif' if file_type.lower() == 'gif' else 'image/png'
             
-            files = {'file': (f'fast_up.{file_type}', image_bytes, mime)}
+            # Requests needs a file-like object for upload
+            upload_stream = io.BytesIO(final_bytes)
+            
+            files = {'file': (f'fast_up.{file_type}', upload_stream, mime)}
             data = {'token': token, 'uploadType': 'image', 'UserID': user_id}
             
             # Session ka use karke Fast Upload
@@ -225,7 +242,7 @@ utils_instance = HighPerformanceUtils()
 
 # 1. Uploading
 def upload(bot, image_data, ext='png'):
-    """Image Upload karke URL deta hai"""
+    """Image Upload karke URL deta hai - CRASH PROOF"""
     return utils_instance.upload_image_fast(
         image_data, 
         bot.token, 
