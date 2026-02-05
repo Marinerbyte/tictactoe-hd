@@ -5,8 +5,8 @@ import psycopg2
 import uuid
 
 # --- CONFIG ---
-# Hum wahi database use kar rahe hain jo Nilu AI ke liye set kiya tha
 DB_URL = os.environ.get("NILU_DATABASE_URL")
+MASTER_USER = "yasin"
 
 # --- DATABASE HANDLERS ---
 def db_exec(query, params=(), fetch=False):
@@ -26,122 +26,152 @@ def db_exec(query, params=(), fetch=False):
         if conn: conn.close()
 
 def init_room_db():
-    # Table banayenge agar nahi hai
-    db_exec("CREATE TABLE IF NOT EXISTS saved_rooms (room_name TEXT PRIMARY KEY)")
+    # 1. Saved Rooms with Requester (Owner)
+    db_exec("CREATE TABLE IF NOT EXISTS saved_rooms (room_name TEXT PRIMARY KEY, requester TEXT)")
+    # 2. Bot Settings (For Default Room)
+    db_exec("CREATE TABLE IF NOT EXISTS bot_settings (key TEXT PRIMARY KEY, value TEXT)")
 
-def get_saved_rooms():
-    rows = db_exec("SELECT room_name FROM saved_rooms", (), True)
-    return [r[0] for r in rows] if rows else []
+def set_default_room(room_name):
+    db_exec("INSERT INTO bot_settings (key, value) VALUES ('default_room', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (room_name,))
 
-def save_room(room_name):
-    db_exec("INSERT INTO saved_rooms (room_name) VALUES (%s) ON CONFLICT DO NOTHING", (room_name,))
+def get_default_room():
+    res = db_exec("SELECT value FROM bot_settings WHERE key = 'default_room'", (), True)
+    return res[0][0] if res else None
+
+def save_room(room_name, requester):
+    db_exec("INSERT INTO saved_rooms (room_name, requester) VALUES (%s, %s) ON CONFLICT (room_name) DO UPDATE SET requester = EXCLUDED.requester", (room_name, requester))
+
+def get_saved_rooms_data():
+    return db_exec("SELECT room_name, requester FROM saved_rooms", (), True) or []
 
 def remove_room(room_name):
     db_exec("DELETE FROM saved_rooms WHERE room_name = %s", (room_name,))
 
+def clear_all_rooms():
+    db_exec("DELETE FROM saved_rooms")
+
+def get_room_requester(room_name):
+    res = db_exec("SELECT requester FROM saved_rooms WHERE room_name = %s", (room_name,), True)
+    return res[0][0] if res else None
+
 # ==========================================
-# ⚡ AUTO-JOIN SEQUENCE (The Anti-Spam Logic)
+# ⚡ ADVANCED AUTO-JOIN LOGIC
 # ==========================================
 def auto_join_task(bot):
-    """
-    Bot start hone par ye function chalega.
-    Ye saved rooms ko 3 second ke gap par join karega.
-    """
-    print("[RoomManager] Waiting for connection stability...")
-    time.sleep(5) # 5 sec wait taaki login pakka ho jaye
-    
-    rooms = get_saved_rooms()
-    if not rooms:
-        print("[RoomManager] No saved rooms found.")
+    print("[RoomManager] Initializing Startup Sequence...")
+    time.sleep(3) # Initial Boot Wait
+
+    # 1. Join Default Room First
+    def_room = get_default_room()
+    if def_room:
+        print(f"[RoomManager] Joining Default Room: {def_room}")
+        bot.join_room(def_room)
+        time.sleep(5) # Wait after default room join
+
+    # 2. Join Saved Rooms Slowly
+    rooms_data = get_saved_rooms_data()
+    if not rooms_data:
+        print("[RoomManager] No saved rooms to join.")
         return
 
-    print(f"[RoomManager] Found {len(rooms)} saved rooms. Joining sequence started...")
-    
-    for room in rooms:
-        if not bot.running: break # Safety check
+    print(f"[RoomManager] Joining {len(rooms_data)} saved rooms...")
+    for room_name, requester in rooms_data:
+        if not bot.running: break
+        if room_name == def_room: continue # Already joined
         
-        print(f"[RoomManager] Joining: {room}")
-        bot.join_room(room)
-        
-        # 3 Second Gap (Anti-Spam Rule)
-        time.sleep(3)
+        print(f"[RoomManager] Auto-Joining: {room_name}")
+        bot.join_room(room_name)
+        time.sleep(4) # 4 second gap to avoid spam filters
     
-    print("[RoomManager] All saved rooms joined.")
+    print("[RoomManager] Startup sequence complete.")
 
 # ==========================================
 # 🔌 PLUGIN SETUP
 # ==========================================
 def setup(bot):
     init_room_db()
-    # Background thread start karte hain jo dheere-dheere join karega
     threading.Thread(target=auto_join_task, args=(bot,), daemon=True).start()
-    print("[RoomManager] System Ready. Auto-join sequence initiated.")
 
 # ==========================================
 # 📨 COMMAND HANDLER
 # ==========================================
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
+    user_lower = user.lower()
     
-    # OWNER CHECK (Security: Sirf aap join/leave karwa sakte ho)
-    # Agar sabke liye kholna hai to ye check hata dena
-    if user.lower() != bot.user_data.get('username', '').lower() and user.lower() != "yasin":
-        return False
-
-    # 1. JOIN COMMAND (!j roomname [sv])
-    if cmd in ["j", "join"]:
+    # 1. DEFAULT ROOM SET (!def roomname)
+    if cmd == "def":
+        if user_lower != MASTER_USER: return False
         if not args:
-            bot.send_message(room_id, "Usage: `!j <roomname> [sv]`")
+            bot.send_message(room_id, "Usage: `!def <roomname>`")
             return True
+        # Join the full name (fix for symbols/spaces)
+        target_room = " ".join(args)
+        set_default_room(target_room)
+        bot.send_message(room_id, f"🏠 **Default Room** set to: {target_room}")
+        return True
+
+    # 2. JOIN COMMAND (!j roomname [sv])
+    if cmd in ["j", "join"]:
+        if not args: return True
         
-        target_room = args[0]
+        # Room name fix: Join all args except the last one if last one is 'sv'
         save_mode = False
-        
-        # Check for 'sv' flag
-        if len(args) > 1 and args[1].lower() == "sv":
+        if len(args) > 1 and args[-1].lower() == "sv":
             save_mode = True
-        
+            target_room = " ".join(args[:-1])
+        else:
+            target_room = " ".join(args)
+
         bot.join_room(target_room)
         
         if save_mode:
-            save_room(target_room)
-            bot.send_message(room_id, f"✅ Joined **{target_room}** & Saved to Auto-Join list.")
+            save_room(target_room, user_lower)
+            bot.send_message(room_id, f"✅ Joined & Saved: **{target_room}** (Owner: @{user})")
         else:
-            bot.send_message(room_id, f"🚀 Joining **{target_room}** (Temporary).")
-            
+            bot.send_message(room_id, f"🚀 Temporary Join: **{target_room}**")
         return True
 
-    # 2. LEAVE COMMAND (!leave roomname)
+    # 3. LEAVE COMMAND (!leave)
     if cmd == "leave":
-        if not args:
-            # Agar sirf !leave likha to current room leave karega
-            current_room_name = bot.room_id_to_name_map.get(room_id)
-            if current_room_name:
-                remove_room(current_room_name) # List se hatao
-                bot.send_message(room_id, f"👋 Leaving {current_room_name} & Removed from list.")
-                # Leave Payload
-                bot.send_json({"handler": "leavechatroom", "id": uuid.uuid4().hex, "roomid": room_id})
-            return True
-            
-        target_room = args[0]
+        current_room_name = bot.room_id_to_name_map.get(room_id)
+        if not current_room_name: return False
+
+        requester = get_room_requester(current_room_name)
         
-        # Database se hatao
-        remove_room(target_room)
-        
-        # Agar bot us room me connected hai to wahan leave command bhejo
-        # (Iske liye room_details check karni padegi agar available hai, 
-        #  warna bot agle restart pe join nahi karega)
-        
-        bot.send_message(room_id, f"🗑️ **{target_room}** removed from Auto-Join list.")
+        # PERMISSION CHECK: Master or the person who saved the room
+        if user_lower == MASTER_USER or (requester and user_lower == requester.lower()):
+            remove_room(current_room_name)
+            bot.send_message(room_id, f"👋 Leaving room and removing from auto-join. Bye!")
+            bot.send_json({"handler": "leavechatroom", "id": uuid.uuid4().hex, "roomid": room_id})
+        else:
+            bot.send_message(room_id, f"🚫 @{user}, only the room requester or Master can make me leave.")
         return True
 
-    # 3. LIST SAVED ROOMS (!rooms)
+    # 4. DELETE SPECIFIC ROOM (!del roomname)
+    if cmd == "del":
+        if user_lower != MASTER_USER: return False
+        if not args: return True
+        
+        # Clear All check
+        if args[0].lower() == "all":
+            clear_all_rooms()
+            bot.send_message(room_id, "🗑️ **All saved rooms** deleted from list.")
+            return True
+        
+        target_room = " ".join(args)
+        remove_room(target_room)
+        bot.send_message(room_id, f"❌ Removed **{target_room}** from saved list.")
+        return True
+
+    # 5. ROOMS LIST
     if cmd == "rooms":
-        rooms = get_saved_rooms()
-        if rooms:
-            msg = "**📂 Saved Rooms:**\n" + "\n".join([f"- {r}" for r in rooms])
+        if user_lower != MASTER_USER: return False
+        rooms_data = get_saved_rooms_data()
+        if rooms_data:
+            msg = "**📂 Saved Rooms:**\n" + "\n".join([f"- {r} (By: {u})" for r, u in rooms_data])
         else:
-            msg = "📂 No rooms saved in Auto-Join list."
+            msg = "📂 No rooms saved."
         bot.send_message(room_id, msg)
         return True
 
