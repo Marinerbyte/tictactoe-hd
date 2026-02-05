@@ -1,111 +1,56 @@
 import os
-import io
 import sys
-import time
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
-import utils
+import math
 import db
-
-# --- FONT STYLES (Unicode Magic) ---
-def to_bold(text):
-    # a-z -> 𝐚-𝐳
-    normal = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    bold = "𝐚𝐛𝐜𝐝𝐞𝐟𝐠𝐡𝐢𝐣𝐤𝐥𝐦𝐧𝐨𝐩𝐪𝐫𝐬𝐭𝐮𝐯𝐰𝐱𝐲𝐳𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗"
-    trans = str.maketrans(normal, bold)
-    return text.translate(trans)
-
-def to_small_caps(text):
-    # a-z -> ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ
-    normal = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    small = "ᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇғɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ"
-    trans = str.maketrans(normal, small)
-    return text.translate(trans)
 
 # --- CONFIG ---
 MASTER_USER = "yasin"
 CURRENCY = "Chips 🎰"
+PAGE_SIZE = 10  # Ek page par 10 bande
 
 def setup(bot):
-    print("[Economy] Advanced Stats System Ready.")
+    print("[Economy] Text-based Stats, Pagination & Help Ready.")
 
-# ==========================================
-# 🎨 VISUAL SCORE CARD (1:1 Premium Design)
-# ==========================================
-
-def draw_score_card(username, avatar_url, chips, total_wins, mines_stats, ttt_stats):
-    W, H = 600, 600
-    # Deep Dark Blue-Black Gradient
-    img = utils.get_gradient(W, H, (10, 10, 20), (30, 30, 50))
-    d = ImageDraw.Draw(img, 'RGBA')
-
-    # Borders & Decorative Elements
-    d.rectangle([10, 10, 590, 590], outline=(255, 215, 0, 80), width=2)
-    d.text((W//2, 40), "₊˚ ✧ ━━━━⊱⋆⊰━━━━ ✧ ₊˚", fill="#FFD700", anchor="mm")
-
-    # 1. User DP with Gold Ring
-    av_img = utils.get_image(avatar_url) if avatar_url else None
-    if not av_img:
-        av_img = utils.get_image(f"https://api.dicebear.com/9.x/adventurer/png?seed={username}")
-    
-    if av_img:
-        av_img = av_img.resize((150, 150), Image.Resampling.LANCZOS)
-        mask = Image.new('L', (150, 150), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 150, 150), fill=255)
-        
-        # Ring
-        d.ellipse([W//2-80, 70, W//2+80, 230], outline="#FFD700", width=5)
-        img.paste(av_img, (W//2-75, 75), mask)
-
-    # 2. Username & Global Rank
-    utils.write_text(d, (W//2, 260), to_bold(username.upper()), size=40, align="center", col="white", shadow=True)
-    utils.write_text(d, (W//2, 305), to_small_caps("global chip holder"), size=20, align="center", col="#AAAAAA")
-
-    # 3. Main Stats (Chips & Wins)
-    # Glass Box for Chips
-    d.rounded_rectangle([50, 330, 550, 420], radius=20, fill=(0,0,0,120), outline="#FFD700", width=1)
-    utils.write_text(d, (W//2, 360), to_small_caps("total chips"), size=18, align="center", col="#FFD700")
-    utils.write_text(d, (W//2, 395), f"🎰 {chips:,}", size=35, align="center", col="white")
-
-    # 4. Game Wise Stats (Divided)
-    y_start = 450
-    # Mines Column
-    utils.write_text(d, (150, y_start), "💣 " + to_small_caps("mines"), size=22, align="center", col="#FF4444")
-    utils.write_text(d, (150, y_start+35), f"𝐖: {mines_stats[0]} | 𝐋: {mines_stats[1]}", size=20, align="center", col="white")
-    
-    # TTT Column
-    utils.write_text(d, (450, y_start), "❌ " + to_small_caps("tictactoe"), size=22, align="center", col="#4facfe")
-    utils.write_text(d, (450, y_start+35), f"𝐖: {ttt_stats[0]} | 𝐋: {ttt_stats[1]}", size=20, align="center", col="white")
-
-    # Footer Border
-    d.text((W//2, 560), "─── ⋆⋅☆⋅⋆ ───", fill="#888888", anchor="mm")
-    
-    return img
-
-# ==========================================
-# ⚙️ LOGIC & COMMANDS
-# ==========================================
-
+# --- UTILS ---
 def get_detailed_stats(uid):
     conn = db.get_connection()
     cur = conn.cursor()
-    # Fetch Specific Games
+    # Game wise wins fetch
     cur.execute("SELECT game_name, wins FROM game_stats WHERE user_id = %s", (str(uid),))
     rows = cur.fetchall()
     conn.close()
     
-    stats = {"mines": [0, 0], "tictactoe": [0, 0]}
+    stats = {"mines": 0, "tictactoe": 0}
     for name, wins in rows:
-        if name in stats: stats[name][0] = wins
-    # Losses estimate (for visual purposes) or you can track real losses in DB if needed
+        if name in stats: 
+            stats[name] = wins
     return stats
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
     uid = str(data.get('userid', user))
-    av_url = data.get("avatar")
     ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
 
-    # 1. !score - Personal Visual Card
+    # 1. !help score - Commands ki list dikhane ke liye
+    if cmd == "help":
+        if args and args[0].lower() == "score":
+            help_msg =  "📖 ECONOMY HELP MENU\n"
+            help_msg += "━━━━━━━━━━━━━━━━━━\n"
+            help_msg += "💰 !score : Apna profile aur Chips dekhein.\n"
+            help_msg += "🏆 !global [page] : Global Leaderboard (10 per page).\n"
+            help_msg += f"🎰 Reward: Games jeet kar {CURRENCY} kamayein.\n"
+            
+            if user.lower() == MASTER_USER:
+                help_msg += "\n👑 MASTER COMMANDS:\n"
+                help_msg += "🔹 !set @user [amt] : Balance set karein.\n"
+                help_msg += "🔹 !reset @user : User data clear karein.\n"
+                help_msg += "🔹 !wipeall : Poori DB saaf karein.\n"
+            
+            help_msg += "━━━━━━━━━━━━━━━━━━"
+            bot.send_message(room_id, help_msg)
+            return True
+
+    # 2. !score - Text-Based Profile
     if cmd == "score":
         try:
             conn = db.get_connection()
@@ -115,58 +60,87 @@ def handle_command(bot, command, room_id, user, args, data):
             conn.close()
 
             chips = row[0] if row else 0
-            total_w = row[1] if row else 0
+            total_wins = row[1] if row else 0
             g_stats = get_detailed_stats(uid)
 
-            def process():
-                img = draw_score_card(user, av_url, chips, total_w, g_stats["mines"], g_stats["tictactoe"])
-                url = utils.upload(bot, img)
-                if url:
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": f"Stats: {user}"})
-            utils.run_in_bg(process)
-            return True
-        except: return True
-
-    # 2. !global - Leaderboard List
-    if cmd == "global":
-        conn = db.get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT 10")
-        rows = cur.fetchall()
-        conn.close()
-        
-        msg = f"🏆 ━━⊱ {to_bold('GLOBAL RANKING')} ⊰━━ 🏆\n"
-        msg += "﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌\n"
-        for i, (name, score) in enumerate(rows):
-            icon = ["🥇", "🥈", "🥉"][i] if i < 3 else "🔹"
-            msg += f"{icon} `#{i+1}` **{to_small_caps(name)}** • {score:,}\n"
-        msg += "﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌﹌"
-        bot.send_message(room_id, msg)
-        return True
-
-    # 3. ADMIN POWER (yasin only)
-    if user.lower() == MASTER_USER:
-        # !set @user 5000
-        if cmd == "set":
-            if not args: return True
-            target = args[0].replace("@", "")
-            amount = int(args[1])
-            # Getting ID from bot mapping
-            target_id = None
-            for r_name, details in bot.room_details.items():
-                if target.lower() in details.get('id_map', {}):
-                    target_id = details['id_map'][target.lower()]
-                    break
+            msg =  f"👤 PROFILE: @{user}\n"
+            msg += f"━━━━━━━━━━━━━━━━━━\n"
+            msg += f"💰 BALANCE: {chips:,} {CURRENCY}\n"
+            msg += f"🏆 TOTAL WINS: {total_wins}\n"
+            msg += f"━━━━━━━━━━━━━━━━━━\n"
+            msg += f"🎮 GAME STATS:\n"
+            msg += f"💣 Mines: {g_stats['mines']} Wins\n"
+            msg += f"❌ TicTacToe: {g_stats['tictactoe']} Wins\n"
+            msg += f"━━━━━━━━━━━━━━━━━━"
             
-            if target_id:
-                conn = db.get_connection()
-                cur = conn.cursor()
-                cur.execute(f"UPDATE users SET global_score = {ph} WHERE user_id = {ph}", (amount, target_id))
-                conn.commit(); conn.close()
-                bot.send_message(room_id, f"✅ @{target} score set to {amount} {CURRENCY}")
+            bot.send_message(room_id, msg)
+            return True
+        except Exception as e:
+            print(f"Score Error: {e}")
             return True
 
-        # !reset @user
+    # 3. !global [page] - Pagination System
+    if cmd == "global":
+        try:
+            page = 1
+            if args and args[0].isdigit():
+                page = int(args[0])
+            
+            offset = (page - 1) * PAGE_SIZE
+            conn = db.get_connection()
+            cur = conn.cursor()
+            
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
+            total_pages = math.ceil(total_users / PAGE_SIZE)
+
+            cur.execute(f"SELECT username, global_score FROM users ORDER BY global_score DESC LIMIT {PAGE_SIZE} OFFSET {offset}")
+            rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                bot.send_message(room_id, f"❌ Page {page} khali hai. Total pages: {total_pages}")
+                return True
+
+            msg = f"🏆 GLOBAL LEADERBOARD (Page {page}/{total_pages})\n"
+            msg += f"━━━━━━━━━━━━━━━━━━\n"
+            for i, (name, score) in enumerate(rows):
+                rank = offset + i + 1
+                medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+                msg += f"{medal} {name} • {score:,}\n"
+            
+            if page < total_pages:
+                msg += f"━━━━━━━━━━━━━━━━━━\n"
+                msg += f"👉 Type !global {page + 1} for next page"
+            
+            bot.send_message(room_id, msg)
+            return True
+        except Exception as e:
+            print(f"Global Error: {e}")
+            return True
+
+    # 4. ADMIN COMMANDS (Master Only)
+    if user.lower() == MASTER_USER:
+        if cmd == "set":
+            if len(args) < 2: return True
+            target = args[0].replace("@", "")
+            try:
+                amount = int(args[1])
+                target_id = None
+                for r_name, details in bot.room_details.items():
+                    if target.lower() in details.get('id_map', {}):
+                        target_id = details['id_map'][target.lower()]
+                        break
+                
+                if target_id:
+                    conn = db.get_connection()
+                    cur = conn.cursor()
+                    cur.execute(f"UPDATE users SET global_score = {ph} WHERE user_id = {ph}", (amount, target_id))
+                    conn.commit(); conn.close()
+                    bot.send_message(room_id, f"✅ @{target} ka balance {amount} Chips set ho gaya.")
+            except: pass
+            return True
+
         if cmd == "reset":
             if not args: return True
             target = args[0].replace("@", "")
@@ -181,17 +155,16 @@ def handle_command(bot, command, room_id, user, args, data):
                 cur.execute(f"UPDATE users SET global_score = 0, wins = 0 WHERE user_id = {ph}", (target_id,))
                 cur.execute(f"DELETE FROM game_stats WHERE user_id = {ph}", (target_id,))
                 conn.commit(); conn.close()
-                bot.send_message(room_id, f"🧹 {to_small_caps('stats cleared for')} @{target}")
+                bot.send_message(room_id, f"🧹 @{target} ke stats reset kar diye gaye.")
             return True
 
-        # !wipeall
         if cmd == "wipeall":
             conn = db.get_connection()
             cur = conn.cursor()
             cur.execute("DELETE FROM users")
             cur.execute("DELETE FROM game_stats")
             conn.commit(); conn.close()
-            bot.send_message(room_id, "🔥 **DATABASE WIPED.** All game data and scores are now zero.")
+            bot.send_message(room_id, "🔥 DATABASE WIPED. Sabka score zero ho gaya.")
             return True
 
     return False
