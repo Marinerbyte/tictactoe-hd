@@ -49,6 +49,7 @@ def get_robust_avatar(avatar_url, username):
         return AVATAR_CACHE[avatar_url].copy()
     try:
         if avatar_url:
+            # Howdies CDN se connect karne ki koshish
             r = requests.get(avatar_url, timeout=5)
             if r.status_code == 200:
                 img = Image.open(io.BytesIO(r.content)).convert("RGBA")
@@ -57,6 +58,7 @@ def get_robust_avatar(avatar_url, username):
     except:
         pass
     try:
+        # Fallback to DiceBear
         fb_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={username}&backgroundColor=transparent"
         r = requests.get(fb_url, timeout=5)
         img = Image.open(io.BytesIO(r.content)).convert("RGBA")
@@ -74,7 +76,7 @@ def circle_crop(img, size):
     return output
 
 # ==========================================
-# 🖌️ RENDERING ENGINE (COMPACT SIZE 500x580)
+# 🖌️ RENDERING ENGINE (COMPACT 500x580)
 # ==========================================
 
 def draw_3d_box(d, x, y, size, text):
@@ -84,7 +86,6 @@ def draw_3d_box(d, x, y, size, text):
     utils.write_text(d, (x+size//2, y+size//2), text, size=30, align="center", shadow=True)
 
 def draw_grid_board(game):
-    """Compact size taaki Howdies UI pe board na kate."""
     W, H = 500, 580 
     img = utils.create_canvas(W, H, color=(15, 15, 20))
     d = ImageDraw.Draw(img)
@@ -94,7 +95,6 @@ def draw_grid_board(game):
     curr_av = game.p1_av if is_p1 else game.p2_av
     curr_lives = game.lives_p1 if is_p1 else game.lives_p2
     
-    # Header Panel
     d.rounded_rectangle([15, 10, 485, 110], radius=20, fill=(45, 55, 85), outline="#00FFFF", width=3)
     p_img = get_robust_avatar(curr_av, curr_name)
     p_img = circle_crop(p_img, 80)
@@ -103,7 +103,6 @@ def draw_grid_board(game):
     utils.write_text(d, (130, 30), to_small_caps(f"TURN: {curr_name}"), size=24, align="left", col="white")
     utils.write_text(d, (130, 65), f"LIVES: {'❤️' * curr_lives}", size=22, align="left")
 
-    # Grid Logic: Show board the current player is walking on
     target_board = game.board_p1 if is_p1 else game.board_p2
     revealed = game.revealed_p1 if is_p1 else game.revealed_p2
     
@@ -121,7 +120,6 @@ def draw_grid_board(game):
             icon = utils.get_emoji("💣" if is_bomb else "🍪", size=50)
             img.paste(icon, (x+17, y+10), icon)
             
-            # Show tile opener DP
             u_dp = get_robust_avatar(curr_av, curr_name)
             u_dp = circle_crop(u_dp, 35)
             img.paste(u_dp, (x+bx_sz-40, y+bx_sz-40), u_dp)
@@ -141,7 +139,7 @@ def draw_blast_card(name, avatar_url):
     utils.write_text(d, (250, 420), to_small_caps(f"{name} HIT A BOMB!"), size=40, align="center", col="red")
     return img
 
-def draw_winner_card(name, avatar_url):
+def draw_winner_card(name, reward, avatar_url):
     W, H = 500, 500
     img = utils.create_canvas(W, H, (10, 30, 10))
     d = ImageDraw.Draw(img)
@@ -151,6 +149,7 @@ def draw_winner_card(name, avatar_url):
     p_img = circle_crop(p_img, 180)
     img.paste(p_img, (160, 200), p_img)
     utils.write_text(d, (250, 430), to_small_caps(f"WINNER: {name}"), size=40, align="center", col="gold")
+    utils.write_text(d, (250, 470), f"{reward} CHIPS", size=30, align="center", col="#00FF00")
     return img
 
 def draw_setup_instructions():
@@ -179,8 +178,8 @@ class MinesGame:
         self.p2_id = self.p2_name = self.p2_av = None
         self.state = 'waiting'
         self.bet = 0
-        self.board_p1 = [0]*12 # Bombs P1 hits (set by P2)
-        self.board_p2 = [0]*12 # Bombs P2 hits (set by P1)
+        self.board_p1 = [0]*12
+        self.board_p2 = [0]*12
         self.revealed_p1 = [False]*12
         self.revealed_p2 = [False]*12
         self.lives_p1 = 3
@@ -197,10 +196,12 @@ class MinesGame:
 def handle_command(bot, command, room_id, user, args, data):
     global games, setup_pending
     uid = str(data.get('userid', user))
-    avatar_url = data.get("avatar")
+    # Correct DP construction for Howdies
+    av_id = data.get("avatar")
+    av_url = f"https://cdn.howdies.app/avatar?image={av_id}" if av_id else None
+    
     cmd = command.lower().strip()
 
-    # --- QUICK STOP ---
     if cmd == "stop" and room_id:
         with game_lock:
             g = games.get(room_id)
@@ -211,7 +212,6 @@ def handle_command(bot, command, room_id, user, args, data):
                 bot.send_message(room_id, to_small_caps(f"🛑 Game stopped by {user}."))
                 return True
 
-    # --- DM SETUP LOGIC ---
     if uid in setup_pending and not room_id:
         nums = [int(s) for s in command.replace(',', ' ').split() if s.isdigit()]
         unique_nums = list(set(nums))
@@ -222,7 +222,6 @@ def handle_command(bot, command, room_id, user, args, data):
                 if not g: 
                     if uid in setup_pending: del setup_pending[uid]
                     return False
-                # Player A sets bombs on Player B's path
                 if uid == g.p1_id:
                     for n in unique_nums: g.board_p2[n-1] = 1
                 else:
@@ -239,14 +238,13 @@ def handle_command(bot, command, room_id, user, args, data):
             bot.send_dm(user, "❌ Send exactly 4 unique numbers (1-12).")
             return True
 
-    # --- ROOM LOBBY ---
     if cmd == "mines":
         bet = int(args[0]) if args and args[0].isdigit() else 500
         with game_lock:
             if room_id in games:
                 bot.send_message(room_id, "⚠️ Game already running.")
                 return True
-            games[room_id] = MinesGame(room_id, uid, user, avatar_url)
+            games[room_id] = MinesGame(room_id, uid, user, av_url)
             games[room_id].bet = bet
         bot.send_message(room_id, to_small_caps(f"💣 Mines! @{user} bet {bet}. Type !join."))
         return True
@@ -255,7 +253,7 @@ def handle_command(bot, command, room_id, user, args, data):
         with game_lock:
             g = games.get(room_id)
             if not g or g.state != 'waiting' or g.p1_id == uid: return False
-            g.p2_id, g.p2_name, g.p2_av = uid, user, avatar_url
+            g.p2_id, g.p2_name, g.p2_av = uid, user, av_url
             g.state = 'setup'
             setup_pending[g.p1_id] = room_id
             setup_pending[g.p2_id] = room_id
@@ -265,7 +263,6 @@ def handle_command(bot, command, room_id, user, args, data):
         bot.send_dm_image(g.p2_name, setup_img, f"Set bombs for @{g.p1_name}. Reply 4 numbers (1-12).")
         return True
 
-    # --- GAMEPLAY ---
     if cmd.isdigit() and room_id:
         idx = int(cmd) - 1
         if not (0 <= idx <= 11): return False
@@ -285,16 +282,23 @@ def handle_command(bot, command, room_id, user, args, data):
             if target_board[idx] == 1: # HIT BOMB
                 if is_p1: g.lives_p1 -= 1
                 else: g.lives_p2 -= 1
-                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_blast_card(user, avatar_url)), "text": "BOOM!"})
+                bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_blast_card(user, av_url)), "text": "BOOM!"})
                 
-                # Check Death
                 if (is_p1 and g.lives_p1 <= 0) or (not is_p1 and g.lives_p2 <= 0):
+                    # --- WINNER LOGIC ---
                     winner_name = g.p2_name if is_p1 else g.p1_name
+                    winner_uid = g.p2_id if is_p1 else g.p1_id
                     winner_av = g.p2_av if is_p1 else g.p1_av
                     loser_id = g.p1_id if is_p1 else g.p2_id
-                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_winner_card(winner_name, winner_av)), "text": "FINISH"})
                     
-                    # Kick Proc
+                    # 1. Image bhejona
+                    reward = g.bet * 2
+                    bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_winner_card(winner_name, reward, winner_av)), "text": "FINISH"})
+                    
+                    # 2. Chips update karna
+                    add_game_result(winner_uid, winner_name, "mines", reward, True)
+                    
+                    # 3. Kick Proc
                     def kick_proc(rid, target):
                         time.sleep(3)
                         bot.send_json({"handler": "kickuser", "roomid": int(rid), "to": int(target)})
