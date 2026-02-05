@@ -5,8 +5,4 @@ psycopg2-binary
 Pillow
 gunicorn
 psutil
-yt-dlp
-pydub
-aiortc
-av
 deep-translator
