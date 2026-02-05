@@ -29,10 +29,10 @@ AVATAR_CACHE = {}
 def setup(bot_ref):
     global BOT_INSTANCE
     BOT_INSTANCE = bot_ref
-    print("[PenaltyStrike] Rule: Min 500 | Format: 'k' enabled.")
+    print("[PenaltyStrike] English Version Loaded.")
 
 # ==========================================
-# 💰 CURRENCY FORMATTER (Next-Level)
+# 💰 CURRENCY FORMATTER
 # ==========================================
 def format_chips(n):
     """10000 -> 10k, 100000 -> 100k conversion"""
@@ -99,10 +99,11 @@ def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=No
     img.paste(bot_av, b_xy, g_mask)
     d.ellipse([b_xy[0]-2, b_xy[1]-2, b_xy[0]+172, b_xy[1]+172], outline=border_col, width=3)
 
-    # Ball & Smoke
+    # Ball & Smoke Effects
     if user_pos:
         bx, by = ball_map.get(user_pos)
         if result == "GOAL":
+            # Smoke Effect
             smoke = Image.new('RGBA', (W, H), (0,0,0,0))
             sd = ImageDraw.Draw(smoke)
             for _ in range(12):
@@ -110,11 +111,12 @@ def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=No
                 sr = random.randint(30, 70)
                 sd.ellipse([sx, sy, sx+sr, sy+sr], fill=(255, 255, 255, 50))
             img = Image.alpha_composite(img, smoke.filter(ImageFilter.GaussianBlur(15)))
-            d = ImageDraw.Draw(img)
+            d = ImageDraw.Draw(img) # Re-bind
+        
         ball = utils.get_emoji("⚽", size=90)
         img.paste(ball, (bx, by), ball)
 
-    # Striker DP
+    # Striker DP (User)
     u_av = get_robust_avatar(user_av, username).resize((140, 140))
     u_mask = Image.new('L', (140, 140), 0)
     ImageDraw.Draw(u_mask).ellipse((0, 0, 140, 140), fill=255)
@@ -124,7 +126,7 @@ def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=No
     img.paste(u_av, (ux, uy), u_mask)
     utils.write_text(d, (ux+70, uy+160), username.upper(), size=22, align="center", col="white", shadow=True)
 
-    # Result Overlay
+    # Result Text Overlay
     if result != "VS":
         overlay = Image.new('RGBA', (W, H), (0,0,0,165))
         img = Image.alpha_composite(img, overlay)
@@ -137,6 +139,7 @@ def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=No
         if result == "GOAL": msg = f"WON {format_chips(win_amt)} CHIPS"
         utils.write_text(d, (W//2, H//2 + 90), msg, size=35, align="center", col="white")
 
+    # Final Rounding
     mask = Image.new('L', (W, H), 0)
     ImageDraw.Draw(mask).rounded_rectangle([0,0,W,H], radius=50, fill=255)
     final = Image.new('RGBA', (W, H), (0,0,0,0))
@@ -154,6 +157,7 @@ def handle_command(bot, command, room_id, user, args, data):
     with games_lock:
         game = penalty_games.get(room_id)
 
+    # 1. Start Game
     if cmd == "pk":
         if game: return True
         try:
@@ -169,10 +173,13 @@ def handle_command(bot, command, room_id, user, args, data):
             
             img = draw_penalty_board(user, av_url)
             bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"MATCH START"})
-            bot.send_message(room_id, f"⚽ @{user}, Shot kahan marna hai? (1, 2, 3)\nBet: {format_chips(bet)} CHIPS")
+            
+            # ENGLISH MESSAGE HERE
+            bot.send_message(room_id, f"⚽ @{user}, Where do you want to shoot? (1, 2, 3)\nBet: {format_chips(bet)} CHIPS")
         except: pass
         return True
 
+    # 2. Shoot Logic
     if cmd in ["1", "2", "3"] and game:
         if uid != game["uid"]: return False
         
@@ -184,18 +191,19 @@ def handle_command(bot, command, room_id, user, args, data):
         if win_amt > 0:
             add_game_result(uid, game["name"], "penalty", win_amt, True)
         
-        # Pass win_amt to display 'k' format on image
         img = draw_penalty_board(game["name"], game["av"], result, user_choice, bot_choice, win_amt)
         bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":result})
         
+        # ENGLISH MESSAGES HERE
         if result == "GOAL":
-            bot.send_message(room_id, f"🥅 **GOAL!** @{game['name']} won {format_chips(win_amt)} CHIPS!")
+            bot.send_message(room_id, f"🥅 **GOAL!** @{game['name']} scored and won {format_chips(win_amt)} CHIPS!")
         else:
-            bot.send_message(room_id, f"🧤 **SAVED!** @{game['name']} lost {format_chips(game['bet'])}.")
+            bot.send_message(room_id, f"🧤 **SAVED!** @{game['name']} missed the shot and lost {format_chips(game['bet'])}.")
 
         with games_lock: penalty_games.pop(room_id, None)
         return True
 
+    # 3. Stop
     if cmd == "stop" and game:
         if uid == game["uid"] or user.lower() == "yasin":
             with games_lock: penalty_games.pop(room_id, None)
