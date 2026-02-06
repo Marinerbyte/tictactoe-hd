@@ -26,10 +26,10 @@ def setup(bot_ref):
     global BOT_REF
     BOT_REF = bot_ref
     threading.Thread(target=cleanup_loop, daemon=True).start()
-    print("[TicTacToe] Stable Version: End-Game Fix | Chips-Only UI | Admin Stop.")
+    print("[TicTacToe] Logic Fixed: Player-Only Stop | Common End-Game.")
 
 # ==========================================
-# 🖼️ STICK AVATAR LOGIC
+# 🖼️ AVATAR ENGINE
 # ==========================================
 
 def get_robust_avatar(avatar_url, username):
@@ -112,17 +112,16 @@ def draw_victory_card(winner_name, chips_won, avatar_url):
 
     utils.write_text(d, (W//2, 370), "🏆 CHAMPION 🏆", size=30, align="center", col="#FFD700")
     utils.write_text(d, (W//2, 435), winner_name.upper(), size=50, align="center", col="white", shadow=True)
-    # ✅ UI Updated: Only Chips shown
     utils.write_text(d, (W//2, 520), f"WON {chips_won} CHIPS", size=38, align="center", col="#00FF7F")
     
     return apply_round_corners(img, 50)
 
 # ==========================================
-# 🧠 COMMON GAME-OVER LOGIC
+# 🧠 COMMON GAME-OVER HANDLER
 # ==========================================
 
 def handle_end(bot, rid, g, result):
-    """Common function to handle game end for both Bot and PvP modes"""
+    """Sahi tareeke se game close karne ke liye common logic"""
     if result == 'draw':
         bot.send_message(rid, "🤝 **DRAW!** Bet chips refunded.")
         if g.mode == 2:
@@ -133,7 +132,7 @@ def handle_end(bot, rid, g, result):
         w_name = g.p1_name if result == 'X' else g.p2_name
         w_av = g.p1_av if result == 'X' else g.p2_av
         
-        # Bot logic rewards vs PvP
+        # Win reward: PvP me double, Bot me 100 fixed
         chips = (g.bet * 2) if g.mode == 2 else 100
         
         if w_id != "BOT":
@@ -141,7 +140,7 @@ def handle_end(bot, rid, g, result):
             img_url = utils.upload(bot, draw_victory_card(w_name, chips, w_av))
             bot.send_json({"handler":"chatroommessage","roomid":rid,"type":"image","url":img_url,"text":f"Champion: @{w_name}"})
         else:
-            bot.send_message(rid, "🤖 **Smart Bot Wins!** Player ko chips nahi mile.")
+            bot.send_message(rid, "🤖 **Smart Bot Wins!** Behtar koshish karein.")
 
     with games_lock:
         if rid in games: del games[rid]
@@ -157,32 +156,37 @@ class TicTacToeGame:
     def __init__(self, room_id, p1_id, p1_name, p1_av):
         self.room_id = room_id
         self.p1_id = p1_id; self.p1_name = p1_name; self.p1_av = p1_av
-        self.p2_id = self.p2_name = self.p2_av = None
+        self.p2_id = None; self.p2_name = None; self.p2_av = None
         self.board = [None]*9
         self.turn = 'X'; self.bet = 0; self.mode = None; self.state = 'lobby'
         self.last_interaction = time.time()
     def touch(self): self.last_interaction = time.time()
 
 # ==========================================
-# 📨 HANDLER
+# 📨 COMMAND HANDLER
 # ==========================================
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip(); uid = str(data.get('userid', user))
     av_url = data.get("avatar") 
 
-    # --- 1. STOP COMMAND (Admin/Host Permission) ---
+    # --- 🛡️ IMPROVED STOP COMMAND (Joined Players Only) ---
     if cmd == "stop":
         with games_lock:
             g = games.get(room_id)
             if not g: return False
-            # ✅ Fix: Check Admin List instead of hardcode
-            is_admin = uid in db.get_all_admins()
-            if uid == g.p1_id or is_admin:
+            
+            # Rule: Only Joined Players (P1 or P2) can stop
+            is_joined_player = (uid == g.p1_id or (g.p2_id and uid == g.p2_id))
+            
+            if is_joined_player:
                 if g.mode == 2:
+                    # PvP Refund
                     db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-                    if g.p2_id: db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
-                bot.send_message(room_id, "🛑 **Game Stopped.** Chips refunded.")
+                    if g.p2_id and g.p2_id != "BOT":
+                        db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
+                
+                bot.send_message(room_id, "🛑 **Game Stopped.** Chips refunded to joined players.")
                 del games[room_id]
                 return True
         return False
@@ -197,23 +201,23 @@ def handle_command(bot, command, room_id, user, args, data):
 
     if not g: return False
 
-    # Lobby Logic
+    # Lobby State
     if g.state == 'lobby' and uid == g.p1_id:
         if cmd == "1":
-            g.mode = 1; g.p2_name = "Smart Bot"; g.p2_id = "BOT"; g.state = 'playing'; g.touch()
+            g.mode = 1; g.p2_name = "Smart Bot"; g.p2_id = "BOT"; g.p2_av = None; g.state = 'playing'; g.touch()
             bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, draw_premium_board(g.board)),"text":"Bot Game Start"})
             return True
         if cmd == "2":
             g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 **Bet amount?**")
             return True
 
-    # Betting/Join
+    # Betting & Joining
     if g.state == 'betting' and uid == g.p1_id and cmd == "bet":
         try:
             amt = int(args[0])
             if db.check_and_deduct_chips(uid, user, amt):
                 g.bet = amt; g.state = 'waiting'; g.touch()
-                bot.send_message(room_id, f"⚔️ @{user} bet **{amt} Chips**. Type `!join`.")
+                bot.send_message(room_id, f"⚔️ @{user} bet **{amt} Chips**. Type `!join` to accept.")
             else: bot.send_message(room_id, "❌ Balance kam hai!")
         except: pass
         return True
@@ -225,7 +229,7 @@ def handle_command(bot, command, room_id, user, args, data):
         else: bot.send_message(room_id, f"❌ Need {g.bet} Chips!")
         return True
 
-    # Moves
+    # Playing State
     if g.state == 'playing' and cmd.isdigit():
         idx = int(cmd)-1
         if not (0<=idx<=8) or g.board[idx] or uid != (g.p1_id if g.turn == 'X' else g.p2_id): return False
@@ -238,7 +242,7 @@ def handle_command(bot, command, room_id, user, args, data):
         
         g.turn = 'O' if g.turn == 'X' else 'X'
         
-        # Smart Bot Move
+        # Bot Turn Fix
         if g.mode == 1 and g.turn == 'O':
             empty = [i for i, x in enumerate(g.board) if x is None]
             g.board[random.choice(empty)] = 'O'
@@ -255,7 +259,7 @@ def handle_command(bot, command, room_id, user, args, data):
     return False
 
 # ==========================================
-# ⏰ CLEANUP
+# ⏰ CLEANUP (Auto-Refund on Inactivity)
 # ==========================================
 
 def cleanup_loop():
@@ -264,7 +268,7 @@ def cleanup_loop():
         now = time.time()
         with games_lock:
             to_del = []
-            for rid, g in games.items():
+            for rid, g in list(games.items()):
                 if now - g.last_interaction > 90:
                     to_del.append(rid)
             for rid in to_del:
@@ -273,5 +277,5 @@ def cleanup_loop():
                     db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
                     if g.p2_id: db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
                 if BOT_REF:
-                    BOT_REF.send_message(rid, "⏳ **Timeout!** Game closed and chips refunded.")
+                    BOT_REF.send_message(rid, "⏳ **Timeout!** Game closed and chips refunded to joined players.")
                 del games[rid]
