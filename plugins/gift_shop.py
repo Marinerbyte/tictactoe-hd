@@ -20,16 +20,14 @@ pending_gifts = {}
 gift_lock = threading.Lock()
 
 def setup(bot):
-    # Start Background Cleanup Thread
     threading.Thread(target=auto_cleanup_task, daemon=True).start()
-    print("[GiftShop] Professional GIF Engine & Memory Manager Loaded.")
+    print("[GiftShop] TTF Font Engine Loaded.")
 
 # ==========================================
 # 🧠 MEMORY MANAGEMENT
 # ==========================================
 
 def auto_cleanup_task():
-    """RAM bachane ke liye purane generated GIFs ko delete karta hai."""
     while True:
         time.sleep(30)
         now = time.time()
@@ -42,12 +40,12 @@ def auto_cleanup_task():
                 del pending_gifts[uid]
 
 # ==========================================
-# 🎨 GIF PROCESSING ENGINE
+# 🎨 GIF PROCESSING ENGINE (TTF Enabled)
 # ==========================================
 
 def create_personalized_gif(gif_url, target_name):
     try:
-        # 1. Download
+        # 1. Download GIF
         resp = requests.get(gif_url, timeout=10)
         if resp.status_code != 200: return None
         
@@ -56,9 +54,18 @@ def create_personalized_gif(gif_url, target_name):
         frames = []
         size = (300, 300) 
         
+        # --- FONT LOADING FIX ---
+        # Utils ne font download kiya hoga, hum wahi use karenge
+        font_size = 24
         try:
-            font = ImageFont.truetype("arialbd.ttf", 22)
+            # Check for the downloaded font from utils
+            if os.path.exists("bot_font.ttf"):
+                font = ImageFont.truetype("bot_font.ttf", font_size)
+            else:
+                # Fallback to internal Utils font loader
+                font = utils.utils_instance.get_font(font_size)
         except:
+            # Absolute fallback
             font = ImageFont.load_default()
 
         # 2. Frame Processing Loop
@@ -86,25 +93,33 @@ def create_personalized_gif(gif_url, target_name):
             # Text Badge
             text = f"For {target_name.title()}"
             
-            # Text Size Calculation
-            # Pillow version compatibility fix
+            # Text Size Calculation (Works with TTF)
             try:
-                bbox = d.textbbox((0, 0), text, font=font)
-                text_w = bbox[2] - bbox[0]
+                # Modern Pillow
+                left, top, right, bottom = d.textbbox((0, 0), text, font=font)
+                text_w = right - left
+                text_h = bottom - top
             except:
-                text_w = len(text) * 10 # Fallback estimation
+                # Old Pillow fallback
+                text_w, text_h = d.textsize(text, font=font)
 
+            # Draw Pill Background
             badge_w = text_w + 40
             bx1 = (300 - badge_w) // 2
             by1 = 240
             bx2 = bx1 + badge_w
-            by2 = 240 + 35
+            by2 = 240 + 38
             
             d.rounded_rectangle([bx1, by1, bx2, by2], radius=15, fill=(0,0,0,200), outline="#FFD700", width=2)
             
-            # Draw Text
-            d.text((150+1, 258+1), text, font=font, fill="black", anchor="mm")
-            d.text((150, 258), text, font=font, fill="#FFD700", anchor="mm")
+            # Draw Text (Centered)
+            text_x = 150
+            text_y = 259 # Center of the pill vertically
+            
+            # Shadow
+            d.text((text_x+1, text_y+1), text, font=font, fill="black", anchor="mm")
+            # Main Text
+            d.text((text_x, text_y), text, font=font, fill="#FFD700", anchor="mm")
 
             frames.append(output)
 
@@ -173,13 +188,10 @@ def handle_command(bot, command, room_id, user, args, data):
                     bot.send_message(room_id, "⚠️ Rendering failed.")
                     return
 
-                # C. Upload (FIXED LINE)
-                # Hum utils.upload use kar rahe hain jo internally sahi function call karega
-                # ext='gif' batana zaroori hai taaki server sahi mime type samjhe
+                # C. Upload
                 upl_url = utils.upload(bot, io.BytesIO(processed_bytes), ext='gif')
 
                 if upl_url:
-                    # D. Save to State
                     with gift_lock:
                         pending_gifts[uid] = {
                             'url': upl_url,
@@ -187,7 +199,6 @@ def handle_command(bot, command, room_id, user, args, data):
                             'timestamp': time.time()
                         }
                     
-                    # E. Send Preview
                     bot.send_json({
                         "handler": "chatroommessage",
                         "roomid": room_id,
@@ -201,7 +212,7 @@ def handle_command(bot, command, room_id, user, args, data):
             
             except Exception as e:
                 print(f"Task Error: {e}")
-                traceback.print_exc() # Print full error to logs
+                traceback.print_exc()
                 bot.send_message(room_id, "❌ System error occurred.")
 
         utils.run_in_bg(generate_task)
