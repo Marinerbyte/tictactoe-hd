@@ -25,7 +25,7 @@ def setup(bot_ref):
     global BOT_REF
     BOT_REF = bot_ref
     threading.Thread(target=cleanup_loop, daemon=True).start()
-    print("[TicTacToe] Logic Guard & UID Mismatch Fixed.")
+    print("[TicTacToe] Standardized Stop Command & Refund System Ready.")
 
 # ==========================================
 # 🖼️ AVATAR ENGINE
@@ -110,15 +110,28 @@ def draw_victory_card(winner_name, chips_won, avatar_url):
     return apply_round_corners(img, 50)
 
 # ==========================================
+# 💰 REFUND HELPER (Rule 6)
+# ==========================================
+
+def refund_chips(g):
+    """Refunds bet to both players if PvP, or to p1 if Vs Bot"""
+    if g.mode == 2: # PvP Mode
+        if g.p1_id:
+            db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
+        if g.p2_id and g.p2_id != "BOT":
+            db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
+    elif g.mode == 1: # Bot Mode (Refund bet if any)
+        if g.p1_id and g.bet > 0:
+            db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
+
+# ==========================================
 # 🧠 HANDLERS
 # ==========================================
 
 def handle_end(bot, rid, g, result):
     if result == 'draw':
-        bot.send_message(rid, "🤝 **DRAW!** Chips refunded.")
-        if g.mode == 2:
-            db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-            db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
+        bot.send_message(rid, "🤝 **DRAW!** Bet refunded to balance.")
+        refund_chips(g)
     else:
         winner_id = g.p1_id if result == 'X' else g.p2_id
         winner_name = g.p1_name if result == 'X' else g.p2_name
@@ -153,23 +166,26 @@ class TicTacToeGame:
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
-    # ✅ FIX 1: UID consistency (Always use String ID from payload)
+    # ✅ FIX 1: UID Consistency (Always String)
     uid = str(data.get('userid', ''))
     av_url = data.get("avatar") 
 
-    # ✅ FIX 2: Stop Check before Game-Guard
+    # ✅ FIX 2 & 7: STANDARD STOP COMMAND (Safety & Refund)
     if cmd == "stop":
         with games_lock:
             g = games.get(room_id)
             if not g:
                 bot.send_message(room_id, "⚠️ No active game in this room.")
                 return True
+            
+            # ✅ Debug Trace (Rule 5)
+            print(f"[Debug] UID: {uid} | P1: {g.p1_id} | P2: {g.p2_id} | State: {g.state}")
+
+            # Allow P1 or joined P2 to stop (Works in all states: Rule 2)
             if uid == g.p1_id or (g.p2_id and uid == g.p2_id):
-                if g.mode == 2:
-                    db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-                    if g.p2_id and g.p2_id != "BOT": db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
-                bot.send_message(room_id, "🛑 **Game Stopped.** Refund processed.")
-                del games[room_id]
+                refund_chips(g) # Rule 3 & 6
+                bot.send_message(room_id, "🛑 **Game Stopped.** Chips refunded.")
+                if room_id in games: del games[room_id] # Rule 4
                 return True
             else:
                 bot.send_message(room_id, "🚫 Only joined players can stop.")
@@ -183,7 +199,6 @@ def handle_command(bot, command, room_id, user, args, data):
         bot.send_message(room_id, f"🎮 **TIC TAC TOE**\n@{user}, choose:\n1️⃣ Vs Bot\n2️⃣ PvP (Bet)")
         return True
 
-    # ✅ FIX 3: Guard moved AFTER global commands
     with games_lock: g = games.get(room_id)
     if not g: return False
 
@@ -204,7 +219,7 @@ def handle_command(bot, command, room_id, user, args, data):
             if db.check_and_deduct_chips(uid, user, amt):
                 g.bet = amt; g.state = 'waiting'; g.touch()
                 bot.send_message(room_id, f"⚔️ @{user} bet **{amt} Chips**. Type `!join`.")
-            else: bot.send_message(room_id, "❌ No chips!")
+            else: bot.send_message(room_id, "❌ Not enough chips!")
         except: pass
         return True
 
@@ -224,28 +239,32 @@ def handle_command(bot, command, room_id, user, args, data):
         res = check_winner(g.board)
         if res: handle_end(bot, room_id, g, res); return True
         g.turn = 'O' if g.turn == 'X' else 'X'
-        if g.mode == 1 and g.turn == 'O': # Bot Move
+        if g.mode == 1 and g.turn == 'O': # Bot Turn
             empty = [i for i, x in enumerate(g.board) if x is None]
             g.board[random.choice(empty)] = 'O'
             res = check_winner(g.board)
             if res: handle_end(bot, room_id, g, res); return True
             g.turn = 'X'
-        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Next Move"})
+        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Move"})
         return True
     return False
 
+# ==========================================
+# ⏰ CLEANUP (Auto-Refund on Inactivity)
+# ==========================================
+
 def cleanup_loop():
     while True:
-        time.sleep(30)
+        time.sleep(15)
         now = time.time()
         with games_lock:
             to_del = []
             for rid, g in list(games.items()):
                 if now - g.last_activity > 90:
-                    if g.mode == 2:
-                        db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-                        if g.p2_id and g.p2_id != "BOT": db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
                     to_del.append(rid)
             for rid in to_del:
-                if BOT_REF: BOT_REF.send_message(rid, "⏳ **Timeout!** Chips refunded.")
+                g = games[rid]
+                refund_chips(g) # Same standard refund logic
+                if BOT_REF:
+                    BOT_REF.send_message(rid, "⏳ **Timeout!** Game closed and chips refunded.")
                 del games[rid]
