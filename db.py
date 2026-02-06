@@ -2,21 +2,23 @@ import os
 import sqlite3
 import psycopg2
 import threading
-import time
 from urllib.parse import urlparse
 
 # --- CONFIGURATION ---
-# Local testing ke liye 'sqlite:///bot.db', Production ke liye env variable
+# Auto-detects: Cloud Database (Postgres) OR Local File (sqlite)
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
 db_lock = threading.Lock()
 
+# ==========================================
+# 🛠️ INTERNAL CONNECTION ENGINE
+# ==========================================
+
 def get_connection():
-    """Database se connect karne ka universal tareeka"""
+    """Smart Connection Handler"""
     if DATABASE_URL.startswith("postgres"):
         try:
             return psycopg2.connect(DATABASE_URL, sslmode='require')
         except:
-            # Fallback parsing agar seedha connect na ho
             result = urlparse(DATABASE_URL)
             return psycopg2.connect(
                 database=result.path[1:],
@@ -26,22 +28,19 @@ def get_connection():
                 port=result.port
             )
     else:
-        # Local file database
+        # Check_same_thread=False is needed for multi-threaded bots
         return sqlite3.connect("bot.db", check_same_thread=False)
 
 def init_db():
-    """
-    Tables banayega agar nahi hain.
-    Yahan hum Chips aur Points alag-alag define kar rahe hain.
-    """
+    """Initializes the database structure. Safe to run multiple times."""
     with db_lock:
         conn = get_connection()
         cur = conn.cursor()
         
-        # 1. MAIN USER TABLE
-        # user_id: Unique ID
-        # chips: Jeb ka paisa (Kam/Zyada hoga)
-        # points: Rank/XP (Sirf badhega, kabhi kam nahi hoga)
+        # TABLE 1: USERS (Global Wallet & Rank)
+        # chips = Currency (Spending Money)
+        # points = Score/XP (Permanent Level)
+        # total_games = Only counts Finished games (Win/Loss/Draw)
         if DATABASE_URL.startswith("postgres"):
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -65,8 +64,7 @@ def init_db():
                 )
             """)
 
-        # 2. GAME SPECIFIC STATS
-        # Har game ka alag hisaab (Kitna jeeta, kitna haara)
+        # TABLE 2: GAME STATS (Detailed History per Game)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS game_stats (
                 user_id TEXT, 
@@ -78,162 +76,177 @@ def init_db():
             )
         """)
         
-        # 3. ADMIN TABLE
+        # TABLE 3: ADMINS (For future panel access)
         cur.execute("CREATE TABLE IF NOT EXISTS bot_admins (user_id TEXT PRIMARY KEY)")
         
         conn.commit()
         conn.close()
-        print("[DB] Core System Ready (Dual Currency: Chips + Points)")
+        print("[DB] Bulletproof Engine Ready. (Chips + Points System)")
 
 # ==========================================
-# 💰 CORE TRANSACTIONS (Plugin Functions)
+# 💳 TRANSACTION SYSTEM (Use this in Games)
 # ==========================================
 
-def get_user_data(user_id):
-    """User ka data laane ke liye (Chips, Points, etc.)"""
-    with db_lock:
-        try:
-            conn = get_connection()
-            cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            cur.execute(f"SELECT username, chips, points, total_wins FROM users WHERE user_id = {ph}", (str(user_id),))
-            row = cur.fetchone()
-            conn.close()
-            return row # (username, chips, points, wins)
-        except: return None
+def check_and_deduct(user_id, username, amount):
+    """
+    GAME START se pehle call karein.
+    - Agar Chips >= Amount hai: Chips kaat lega aur True return karega.
+    - Agar Chips kam hain: False return karega (Game mat start karna).
+    - Amount 0 hai (Free game): True return karega.
+    """
+    if amount < 0: return False # Security check
+    if amount == 0: return True # Free game, allow immediately
 
-def update_balance(user_id, username, amount):
-    """
-    Sirf Chips update karne ke liye (Bet lagane ke waqt).
-    Ye Points (Rank) ko touch nahi karega.
-    """
     with db_lock:
         try:
-            conn = get_connection()
-            cur = conn.cursor()
+            conn = get_connection(); cur = conn.cursor()
             ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
             uid = str(user_id)
-            
-            # Ensure user exists
+
+            # 1. Ensure User Exists
             if DATABASE_URL.startswith("postgres"):
                 cur.execute(f"INSERT INTO users (user_id, username) VALUES ({ph}, {ph}) ON CONFLICT (user_id) DO NOTHING", (uid, username))
             else:
                 cur.execute(f"INSERT OR IGNORE INTO users (user_id, username) VALUES ({ph}, {ph})", (uid, username))
             
-            # Update Chips
-            cur.execute(f"UPDATE users SET chips = chips + {ph} WHERE user_id = {ph}", (amount, uid))
-            
-            conn.commit()
-            conn.close()
-            return True
+            # 2. Check Balance
+            cur.execute(f"SELECT chips FROM users WHERE user_id = {ph}", (uid,))
+            row = cur.fetchone()
+            current_balance = row[0] if row else 0
+
+            if current_balance >= amount:
+                # 3. Deduct Money
+                cur.execute(f"UPDATE users SET chips = chips - {ph} WHERE user_id = {ph}", (amount, uid))
+                conn.commit(); conn.close()
+                return True # Transaction Successful
+            else:
+                conn.close()
+                return False # Not enough money
         except Exception as e:
-            print(f"[DB Error] Balance Update: {e}")
+            print(f"[DB Error] Deduct: {e}")
             return False
 
-def add_game_result(user_id, username, game_name, profit_amount, is_win):
+def add_game_result(user_id, username, game_name, chips_won, points_won, result_type):
     """
-    GAME KHATAM HONE PAR CALL KAREIN.
-    - Chips: Profit add hoga.
-    - Points: Sirf agar jeeta hai toh add honge.
-    - Stats: Win/Loss update hoga.
+    GAME END hone par call karein.
+    - chips_won: Kitne chips user ko dene hain (Winnings).
+    - points_won: Kitne Points (Score) dene hain.
+    - result_type: 'win', 'loss', 'draw', 'refund'
     """
     if not user_id or user_id == "BOT": return
 
     with db_lock:
         try:
-            conn = get_connection()
-            cur = conn.cursor()
+            conn = get_connection(); cur = conn.cursor()
             ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
             uid = str(user_id)
-            
-            # Logic:
-            # 1. Chips hamesha update honge (Win hai to +, Loss hai to 0 kyunki bet pehle hi kat gayi thi)
-            # 2. Points sirf Win par badhenge (jitna profit hua utne points)
-            
-            points_added = profit_amount if (is_win and profit_amount > 0) else 0
-            win_inc = 1 if is_win else 0
-            loss_inc = 0 if is_win else 1
-            
-            # Ensure user exists
+
+            # Stats Calculation
+            win_inc = 1 if result_type == 'win' else 0
+            loss_inc = 1 if result_type == 'loss' else 0
+            # Game tabhi count hoga jab result win/loss/draw ho (Refund me count nahi hoga)
+            game_inc = 1 if result_type in ['win', 'loss', 'draw'] else 0
+
+            # 1. Ensure User Exists (Safety)
             if DATABASE_URL.startswith("postgres"):
                 cur.execute(f"INSERT INTO users (user_id, username) VALUES ({ph}, {ph}) ON CONFLICT (user_id) DO NOTHING", (uid, username))
             else:
                 cur.execute(f"INSERT OR IGNORE INTO users (user_id, username) VALUES ({ph}, {ph})", (uid, username))
 
-            # 1. Update Global Stats
+            # 2. Update Wallet & Global Stats
             q1 = f"""
                 UPDATE users 
                 SET chips = chips + {ph}, 
                     points = points + {ph}, 
                     total_wins = total_wins + {ph}, 
-                    total_games = total_games + 1 
+                    total_games = total_games + {ph} 
                 WHERE user_id = {ph}
             """
-            cur.execute(q1, (profit_amount, points_added, win_inc, uid))
+            cur.execute(q1, (chips_won, points_won, win_inc, game_inc, uid))
 
-            # 2. Update Game-Specific Stats
-            # Pehle row banayenge agar nahi hai
-            if DATABASE_URL.startswith("postgres"):
-                cur.execute(f"INSERT INTO game_stats (user_id, game_name) VALUES ({ph}, {ph}) ON CONFLICT (user_id, game_name) DO NOTHING", (uid, game_name))
-            else:
-                cur.execute(f"INSERT OR IGNORE INTO game_stats (user_id, game_name) VALUES ({ph}, {ph})", (uid, game_name))
-            
-            q2 = f"""
-                UPDATE game_stats 
-                SET wins = wins + {ph}, 
-                    losses = losses + {ph}, 
-                    earnings = earnings + {ph} 
-                WHERE user_id = {ph} AND game_name = {ph}
-            """
-            cur.execute(q2, (win_inc, loss_inc, profit_amount, uid, game_name))
+            # 3. Update Game Specific Stats (Only if not a refund)
+            if result_type != 'refund':
+                if DATABASE_URL.startswith("postgres"):
+                    cur.execute(f"INSERT INTO game_stats (user_id, game_name) VALUES ({ph}, {ph}) ON CONFLICT (user_id, game_name) DO NOTHING", (uid, game_name))
+                else:
+                    cur.execute(f"INSERT OR IGNORE INTO game_stats (user_id, game_name) VALUES ({ph}, {ph})", (uid, game_name))
+                
+                q2 = f"""
+                    UPDATE game_stats 
+                    SET wins = wins + {ph}, 
+                        losses = losses + {ph}, 
+                        earnings = earnings + {ph} 
+                    WHERE user_id = {ph} AND game_name = {ph}
+                """
+                # Note: Earnings tracks net chips added here
+                cur.execute(q2, (win_inc, loss_inc, chips_won, uid, game_name))
 
-            conn.commit()
-            conn.close()
+            conn.commit(); conn.close()
             return True
         except Exception as e:
-            print(f"[DB Error] Game Result: {e}")
+            print(f"[DB Error] Add Result: {e}")
             return False
 
 # ==========================================
-# 👑 ADMIN & LEADERBOARD HELPERS
+# 📊 DATA FETCHING & ADMIN TOOLS
 # ==========================================
 
-def get_top_players(limit=10, order_by="points"):
-    """Leaderboard ke liye data lata hai"""
+def get_user_profile(user_id):
+    """Returns: {'chips': 1000, 'points': 50, 'wins': 5, 'games': 10}"""
     with db_lock:
         try:
-            conn = get_connection()
-            cur = conn.cursor()
-            # Order by 'points' (Rank) or 'chips' (Wealth)
-            col = "points" if order_by == "points" else "chips"
-            cur.execute(f"SELECT username, {col} FROM users ORDER BY {col} DESC LIMIT {limit}")
-            rows = cur.fetchall()
-            conn.close()
-            return rows
-        except: return []
-
-def admin_set_chips(username, amount):
-    """Admin command ke liye (Chips set karna)"""
-    with db_lock:
-        try:
-            conn = get_connection()
-            cur = conn.cursor()
+            conn = get_connection(); cur = conn.cursor()
             ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            cur.execute(f"UPDATE users SET chips = {ph} WHERE username = {ph}", (amount, username))
-            conn.commit()
-            conn.close()
+            cur.execute(f"SELECT chips, points, total_wins, total_games FROM users WHERE user_id = {ph}", (str(user_id),))
+            row = cur.fetchone(); conn.close()
+            if row:
+                return {"chips": row[0], "points": row[1], "wins": row[2], "games": row[3]}
+            return {"chips": 1000, "points": 0, "wins": 0, "games": 0} # Default
+        except: return None
+
+def admin_update_balance(user_id, username, chips=0, points=0):
+    """
+    Economy Management ke liye.
+    External plugins (Shop/Daily Bonus) isko use karke chips add/remove kar sakte hain.
+    chips: Positive to add, Negative to remove.
+    points: Positive to add, Negative to remove.
+    """
+    with db_lock:
+        try:
+            conn = get_connection(); cur = conn.cursor()
+            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
+            uid = str(user_id)
+            
+            # Create if not exists
+            if DATABASE_URL.startswith("postgres"):
+                cur.execute(f"INSERT INTO users (user_id, username) VALUES ({ph}, {ph}) ON CONFLICT (user_id) DO NOTHING", (uid, username))
+            else:
+                cur.execute(f"INSERT OR IGNORE INTO users (user_id, username) VALUES ({ph}, {ph})", (uid, username))
+            
+            cur.execute(f"UPDATE users SET chips = chips + {ph}, points = points + {ph} WHERE user_id = {ph}", (chips, points, uid))
+            conn.commit(); conn.close()
             return True
         except: return False
 
-def wipe_database():
-    """RESET EVERYTHING (Danger Zone)"""
+def get_leaderboard(limit=10):
+    """Returns top players by POINTS (Score)"""
     with db_lock:
         try:
-            conn = get_connection()
-            cur = conn.cursor()
+            conn = get_connection(); cur = conn.cursor()
+            cur.execute(f"SELECT username, points, chips, total_wins FROM users ORDER BY points DESC LIMIT {limit}")
+            rows = cur.fetchall(); conn.close()
+            # Returns list of tuples: (name, points, chips, wins)
+            return rows
+        except: return []
+
+def wipe_everything():
+    """⚠️ DANGER: Resets the entire database"""
+    with db_lock:
+        try:
+            conn = get_connection(); cur = conn.cursor()
             cur.execute("DELETE FROM users")
             cur.execute("DELETE FROM game_stats")
-            conn.commit()
-            conn.close()
+            conn.commit(); conn.close()
+            print("[DB] Wipe Complete.")
             return True
         except: return False
