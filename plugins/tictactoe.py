@@ -7,19 +7,15 @@ import requests
 import io
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-# --- UTILS & DB INTEGRATION ---
-try:
-    import utils
-except ImportError:
-    print("[TicTacToe] Error: utils.py missing!")
-
+# --- UTILS & DB ---
+try: import utils
+except ImportError: print("[TicTacToe] Error: utils.py missing!")
 try:
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     import db
-except Exception as e:
-    print(f"DB Error: {e}")
+except Exception as e: print(f"DB Error: {e}")
 
-# --- GLOBAL SETTINGS ---
+# --- GLOBAL STATE ---
 games = {} 
 games_lock = threading.Lock()
 AVATAR_CACHE = {}
@@ -28,20 +24,16 @@ BOT_REF = None
 def setup(bot_ref):
     global BOT_REF
     BOT_REF = bot_ref
-    # Inactivity Cleanup Thread (90 Seconds)
     threading.Thread(target=cleanup_loop, daemon=True).start()
-    print("[TicTacToe] Rewrite Complete: Multi-Room, Refund & Strict DP Ready.")
+    print("[TicTacToe] Logic Guard & UID Mismatch Fixed.")
 
 # ==========================================
-# 🖼️ STRIKT AVATAR ENGINE (Source of Truth)
+# 🖼️ AVATAR ENGINE
 # ==========================================
 
 def get_avatar(avatar_url, username):
-    # 1. Cache Check
     if avatar_url and avatar_url in AVATAR_CACHE:
         return AVATAR_CACHE[avatar_url].copy()
-
-    # 2. Download with Timeout
     if avatar_url:
         try:
             r = requests.get(avatar_url, timeout=4)
@@ -50,16 +42,11 @@ def get_avatar(avatar_url, username):
                 AVATAR_CACHE[avatar_url] = img
                 return img.copy()
         except: pass
-
-    # 3. Fallback to DiceBear
     try:
         fb_url = f"https://api.dicebear.com/9.x/adventurer/png?seed={username}&backgroundColor=transparent"
         r = requests.get(fb_url, timeout=4)
-        if r.status_code == 200:
-            return Image.open(io.BytesIO(r.content)).convert("RGBA")
+        if r.status_code == 200: return Image.open(io.BytesIO(r.content)).convert("RGBA")
     except: pass
-
-    # 4. Final Safety Placeholder
     return Image.new("RGBA", (100, 100), (120, 120, 120, 255))
 
 def apply_round_corners(img, radius):
@@ -71,7 +58,7 @@ def apply_round_corners(img, radius):
     return output
 
 # ==========================================
-# 🎨 GRAPHICS ENGINE (Premium 1:1 UI)
+# 🎨 GRAPHICS ENGINE
 # ==========================================
 
 def draw_premium_board(board):
@@ -80,79 +67,55 @@ def draw_premium_board(board):
     img = Image.new('RGBA', (W, H), (0,0,0,0))
     img.paste(base, (0,0))
     d = ImageDraw.Draw(img)
-
-    # Frame Design
     d.rounded_rectangle([5, 5, W-5, H-5], radius=40, outline="#EC4899", width=4)
     utils.write_text(d, (W//2, 60), "TIC TAC TOE", size=45, align="center", col="white", shadow=True)
-
     grid_sz = 540
     box_sz = grid_sz // 3
     mx, my = (W - grid_sz)//2, 120
-    
     for i in range(9):
         r, c = i // 3, i % 3
         bx, by = mx + c * box_sz, my + r * box_sz
-        # Neon Boxes
         d.rounded_rectangle([bx+8, by+8, bx+box_sz-8, by+box_sz-8], radius=20, outline="#4facfe", width=4)
-        
         symbol = board[i]
         cx, cy = bx + box_sz//2, by + box_sz//2
-        
         if symbol == 'X':
             s = 45
-            d.line([(cx-s, cy-s), (cx+s, cy+s)], fill="#ff4d4d", width=16) # Red X
+            d.line([(cx-s, cy-s), (cx+s, cy+s)], fill="#ff4d4d", width=16) 
             d.line([(cx+s, cy-s), (cx-s, cy+s)], fill="#ff4d4d", width=16)
         elif symbol == 'O':
             s = 50
-            d.ellipse([cx-s, cy-s, cx+s, cy+s], outline="#2ecc71", width=16) # Green O
+            d.ellipse([cx-s, cy-s, cx+s, cy+s], outline="#2ecc71", width=16)
         else:
-            # Faint Guide Numbers
             utils.write_text(d, (cx, cy), str(i+1), size=40, col=(255, 255, 255, 40), align="center")
-
     return apply_round_corners(img, 40)
 
-def draw_victory_card(winner_name, chips_won, points_won, avatar_url):
+def draw_victory_card(winner_name, chips_won, avatar_url):
     W, H = 600, 600
     base = utils.get_gradient(W, H, (20, 10, 40), (60, 20, 80))
     img = Image.new('RGBA', (W, H), (0,0,0,0))
     img.paste(base, (0,0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([5, 5, W-5, H-5], radius=50, outline="#FFD700", width=8)
-
-    # Winner DP
     avatar = get_avatar(avatar_url, winner_name)
     avatar = avatar.resize((240, 240), Image.Resampling.LANCZOS)
     mask = Image.new('L', (240, 240), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, 240, 240), fill=255)
-    
     cx, cy = W//2, 210
     d.ellipse([cx-130, cy-130, cx+130, cy+130], outline="#EC4899", width=12)
     d.ellipse([cx-122, cy-122, cx+122, cy+122], outline="white", width=4)
     img.paste(avatar, (cx-120, cy-120), mask)
-
     utils.write_text(d, (W//2, 370), "🏆 CHAMPION 🏆", size=30, align="center", col="#FFD700")
     utils.write_text(d, (W//2, 435), winner_name.upper(), size=50, align="center", col="white", shadow=True)
-    
-    reward_text = f"+{chips_won} Chips | +{points_won} Points"
-    utils.write_text(d, (W//2, 520), reward_text, size=35, align="center", col="#00FF7F")
-    
+    utils.write_text(d, (W//2, 520), f"WON {chips_won} CHIPS", size=38, align="center", col="#00FF7F")
     return apply_round_corners(img, 50)
 
 # ==========================================
-# 🧠 CORE ENGINE & HANDLERS
+# 🧠 HANDLERS
 # ==========================================
 
-def check_winner(b):
-    win_pos = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
-    for a, b1, c in win_pos:
-        if b[a] and b[a] == b[b1] == b[c]: return b[a]
-    if None not in b: return 'draw'
-    return None
-
 def handle_end(bot, rid, g, result):
-    """Common Exit logic for Cleanup/Rewards"""
     if result == 'draw':
-        bot.send_message(rid, "🤝 **DRAW!** Bet refunded to balance.")
+        bot.send_message(rid, "🤝 **DRAW!** Chips refunded.")
         if g.mode == 2:
             db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
             db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
@@ -160,29 +123,27 @@ def handle_end(bot, rid, g, result):
         winner_id = g.p1_id if result == 'X' else g.p2_id
         winner_name = g.p1_name if result == 'X' else g.p2_name
         winner_av = g.p1_av if result == 'X' else g.p2_av
-        
-        # Reward Logic: PvP=Double, Bot=100 Fixed
-        chips_won = (g.bet * 2) if g.mode == 2 else 100
-        points_won = 50
-
+        chips = (g.bet * 2) if g.mode == 2 else 100
         if winner_id != "BOT":
-            db.add_game_result(winner_id, winner_name, "tictactoe", chips_won, True, points_won)
-            # Send Winner Card
-            win_url = utils.upload(bot, draw_victory_card(winner_name, chips_won, points_won, winner_av))
+            db.add_game_result(winner_id, winner_name, "tictactoe", chips, True, 50)
+            win_url = utils.upload(bot, draw_victory_card(winner_name, chips, winner_av))
             bot.send_json({"handler": "chatroommessage", "roomid": rid, "type": "image", "url": win_url, "text": "Champion!"})
-        else:
-            bot.send_message(rid, "🤖 **Bot Wins!** Better luck next time.")
-
+        else: bot.send_message(rid, "🤖 **Bot Wins!**")
     with games_lock:
         if rid in games: del games[rid]
+
+def check_winner(b):
+    win_pos = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
+    for a, b1, c in win_pos:
+        if b[a] and b[a] == b[b1] == b[c]: return b[a]
+    return 'draw' if None not in b else None
 
 class TicTacToeGame:
     def __init__(self, room_id, p1_id, p1_name, p1_av):
         self.room_id = room_id
         self.p1_id = p1_id; self.p1_name = p1_name; self.p1_av = p1_av
         self.p2_id = None; self.p2_name = None; self.p2_av = None
-        self.board = [None]*9
-        self.turn = 'X'; self.bet = 0; self.mode = None; self.state = 'lobby'
+        self.board = [None]*9; self.turn = 'X'; self.bet = 0; self.mode = None; self.state = 'lobby'
         self.last_activity = time.time()
     def touch(self): self.last_activity = time.time()
 
@@ -192,102 +153,86 @@ class TicTacToeGame:
 
 def handle_command(bot, command, room_id, user, args, data):
     cmd = command.lower().strip()
-    uid = str(data.get('userid', user))
+    # ✅ FIX 1: UID consistency (Always use String ID from payload)
+    uid = str(data.get('userid', ''))
     av_url = data.get("avatar") 
 
-    # 🛡️ STOP COMMAND (High Priority)
+    # ✅ FIX 2: Stop Check before Game-Guard
     if cmd == "stop":
         with games_lock:
             g = games.get(room_id)
             if not g:
                 bot.send_message(room_id, "⚠️ No active game in this room.")
                 return True
-            
-            # Allow only joined players to stop
             if uid == g.p1_id or (g.p2_id and uid == g.p2_id):
                 if g.mode == 2:
                     db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-                    if g.p2_id and g.p2_id != "BOT":
-                        db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
-                bot.send_message(room_id, "🛑 **Game Stopped.** Chips refunded.")
+                    if g.p2_id and g.p2_id != "BOT": db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
+                bot.send_message(room_id, "🛑 **Game Stopped.** Refund processed.")
                 del games[room_id]
                 return True
             else:
-                bot.send_message(room_id, "🚫 Only playing members can stop this game.")
+                bot.send_message(room_id, "🚫 Only joined players can stop.")
                 return True
 
-    # Check Existing Game
-    with games_lock: g = games.get(room_id)
-
-    # INITIALIZATION
+    # Global Initialization
     if cmd == "tic":
-        if g: return True
-        with games_lock: games[room_id] = TicTacToeGame(room_id, uid, user, av_url)
-        bot.send_message(room_id, f"🎮 **TIC TAC TOE**\n@{user}, Mode select karo:\n1️⃣ Vs Bot\n2️⃣ Multiplayer (PvP Bet)")
+        with games_lock:
+            if room_id in games: return True
+            games[room_id] = TicTacToeGame(room_id, uid, user, av_url)
+        bot.send_message(room_id, f"🎮 **TIC TAC TOE**\n@{user}, choose:\n1️⃣ Vs Bot\n2️⃣ PvP (Bet)")
         return True
 
+    # ✅ FIX 3: Guard moved AFTER global commands
+    with games_lock: g = games.get(room_id)
     if not g: return False
 
-    # MODE SELECTION
+    # Mode Selection
     if g.state == 'lobby' and uid == g.p1_id:
         if cmd == "1":
             g.mode = 1; g.p2_name = "Bot"; g.p2_id = "BOT"; g.state = 'playing'; g.touch()
-            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Game Start"})
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Bot Start"})
             return True
         if cmd == "2":
-            g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 **Bet kitni hogi?** (e.g. !bet 500)")
+            g.mode = 2; g.state = 'betting'; bot.send_message(room_id, "💰 **Bet amount?**")
             return True
 
-    # PvP BETTING
+    # PvP Setup
     if g.state == 'betting' and uid == g.p1_id and cmd == "bet":
         try:
             amt = int(args[0])
             if db.check_and_deduct_chips(uid, user, amt):
                 g.bet = amt; g.state = 'waiting'; g.touch()
-                bot.send_message(room_id, f"⚔️ @{user} bet **{amt} Chips**. Type `!join` to accept!")
-            else: bot.send_message(room_id, "❌ Not enough chips!")
+                bot.send_message(room_id, f"⚔️ @{user} bet **{amt} Chips**. Type `!join`.")
+            else: bot.send_message(room_id, "❌ No chips!")
         except: pass
         return True
 
-    # PvP JOINING
     if g.state == 'waiting' and cmd == "join" and uid != g.p1_id:
         if db.check_and_deduct_chips(uid, user, g.bet):
             g.p2_id = uid; g.p2_name = user; g.p2_av = av_url; g.state = 'playing'; g.touch()
             bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Match Start"})
-        else: bot.send_message(room_id, f"❌ Need {g.bet} Chips to join!")
+        else: bot.send_message(room_id, f"❌ Need {g.bet} Chips!")
         return True
 
-    # GAMEPLAY MOVES
+    # Gameplay
     if g.state == 'playing' and cmd.isdigit():
         idx = int(cmd) - 1
         if not (0 <= idx <= 8) or g.board[idx]: return True
-        # Turn Check
         if uid != (g.p1_id if g.turn == 'X' else g.p2_id): return False
-        
         g.board[idx] = g.turn; g.touch()
         res = check_winner(g.board)
         if res: handle_end(bot, room_id, g, res); return True
-        
-        # Toggle
         g.turn = 'O' if g.turn == 'X' else 'X'
-
-        # Bot Move Logic
-        if g.mode == 1 and g.turn == 'O':
+        if g.mode == 1 and g.turn == 'O': # Bot Move
             empty = [i for i, x in enumerate(g.board) if x is None]
             g.board[random.choice(empty)] = 'O'
             res = check_winner(g.board)
             if res: handle_end(bot, room_id, g, res); return True
             g.turn = 'X'
-
-        img_url = utils.upload(bot, draw_premium_board(g.board))
-        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": img_url, "text": "Next Move"})
+        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": utils.upload(bot, draw_premium_board(g.board)), "text": "Next Move"})
         return True
-
     return False
-
-# ==========================================
-# ⏰ AUTO CLEANUP LOOP (90s)
-# ==========================================
 
 def cleanup_loop():
     while True:
@@ -297,14 +242,10 @@ def cleanup_loop():
             to_del = []
             for rid, g in list(games.items()):
                 if now - g.last_activity > 90:
-                    # Automatic Refund before deleting
                     if g.mode == 2:
                         db.update_balance(g.p1_id, g.p1_name, g.bet, 0)
-                        if g.p2_id and g.p2_id != "BOT":
-                            db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
+                        if g.p2_id and g.p2_id != "BOT": db.update_balance(g.p2_id, g.p2_name, g.bet, 0)
                     to_del.append(rid)
-            
             for rid in to_del:
-                if BOT_REF:
-                    BOT_REF.send_message(rid, "⏳ **Game Timeout!** Chips refunded to balance.")
+                if BOT_REF: BOT_REF.send_message(rid, "⏳ **Timeout!** Chips refunded.")
                 del games[rid]
