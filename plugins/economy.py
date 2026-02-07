@@ -10,20 +10,17 @@ PAGE_SIZE = 10
 SESSION_TIMEOUT = 15 
 MIN_TRANSFER_BALANCE = 5000 
 
-# HARDCODED ADMIN (Boss)
-SUPER_ADMINS = ["yasin"] 
-
-# Sessions: {room_id: {'type', 'page', 'expires', 'owner_id'}}
+# Sessions store karne ke liye
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 def setup(bot):
-    print(f"[Economy] Final Revision Loaded. Super Admin: {SUPER_ADMINS}")
+    print("[Economy] Centralized Ledger System Active (Powered by Engine Boss).")
 
 # --- HELPERS ---
 
 def format_k(n):
-    """1000 -> 1k, 1100 -> 1.1k, 2000 -> 2k notation"""
+    """1000 -> 1k, 1100 -> 1.1k logic"""
     try:
         n = int(n)
         if n < 1000: return str(n)
@@ -44,13 +41,13 @@ def get_target_id(bot, room_id, name):
     if not name: return None
     clean_name = name.replace("@", "").strip().lower()
     
-    # 1. Room Map mein check karo (Online users)
+    # 1. Online users check
     room_data = bot.room_details.get(room_id)
     if room_data:
         tid = room_data.get('id_map', {}).get(clean_name)
         if tid: return tid
 
-    # 2. Database mein check karo (Offline users)
+    # 2. Offline DB check
     conn = db.get_connection(); cur = conn.cursor()
     ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
     cur.execute(f"SELECT user_id FROM users WHERE LOWER(username) = {ph} LIMIT 1", (clean_name,))
@@ -73,10 +70,10 @@ def handle_command(bot, cmd, room_id, user, args, data):
     uid = str(data.get('userid'))
     now = time.time()
     
-    # Admin Check
-    is_admin = (user.lower() in SUPER_ADMINS) or (uid in [str(a) for a in db.get_all_admins()])
+    # 🔥 YE HAI JUGAD: Engine se pucho kaun hai Boss
+    is_admin = bot.is_boss(user, uid)
 
-    # 👮 ADMIN COMMANDS (Set/Reset Power)
+    # 👮 ADMIN COMMANDS
     if is_admin:
         # !setc <user> <amount>
         if cmd == "setc" and len(args) >= 2:
@@ -87,9 +84,9 @@ def handle_command(bot, cmd, room_id, user, args, data):
                     target_val = int(args[1])
                     diff = target_val - target_data['chips']
                     db.update_balance(tid, args[0], chips_change=diff)
-                    bot.send_message(room_id, f"✅ Admin: {args[0]} chips set to {format_k(target_val)}")
+                    bot.send_message(room_id, f"✅ Boss: {args[0]} chips set to {format_k(target_val)}")
                 except: pass
-            else: bot.send_message(room_id, "❌ User not found in DB.")
+            else: bot.send_message(room_id, "❌ User not in DB.")
             return True
 
         # !sets <user> <amount>
@@ -101,20 +98,18 @@ def handle_command(bot, cmd, room_id, user, args, data):
                     target_val = int(args[1])
                     diff = target_val - target_data['points']
                     db.update_balance(tid, args[0], points_change=diff)
-                    bot.send_message(room_id, f"✅ Admin: {args[0]} score set to {format_k(target_val)}")
+                    bot.send_message(room_id, f"✅ Boss: {args[0]} score set to {format_k(target_val)}")
                 except: pass
             return True
 
-        # !resetc <user>
         if cmd == "resetc" and args:
             tid = get_target_id(bot, room_id, args[0])
             if tid:
                 bal = db.get_user_data(tid)['chips']
                 db.update_balance(tid, args[0], chips_change=-bal)
-                bot.send_message(room_id, f"🧹 {args[0]} chips reset to 0.")
+                bot.send_message(room_id, f"🧹 {args[0]}'s chips reset to 0.")
             return True
 
-        # !resets <user>
         if cmd == "resets" and args:
             tid = get_target_id(bot, room_id, args[0])
             if tid:
@@ -123,16 +118,15 @@ def handle_command(bot, cmd, room_id, user, args, data):
                 cur.execute(f"UPDATE users SET points = 0, wins = 0 WHERE user_id = {ph}", (str(tid),))
                 cur.execute(f"DELETE FROM game_stats WHERE user_id = {ph}", (str(tid),))
                 conn.commit(); conn.close()
-                bot.send_message(room_id, f"🔥 {args[0]}'s history wiped clean.")
+                bot.send_message(room_id, f"🔥 {args[0]}'s record wiped clean.")
             return True
 
-        # !wipedb
         if cmd == "wipedb":
             conn = db.get_connection(); cur = conn.cursor()
             cur.execute("UPDATE users SET points = 0, chips = 10000, wins = 0")
             cur.execute("DELETE FROM game_stats")
             conn.commit(); conn.close()
-            bot.send_message(room_id, "☢️ DB WIPE: Everything reset to default.")
+            bot.send_message(room_id, "☢️ DATABASE WIPE: Everything reset to default.")
             return True
 
     # 👤 USER COMMANDS
@@ -143,7 +137,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
             amt = int(args[1])
             if amt <= 0: return True
             tid = get_target_id(bot, room_id, args[0])
-            if not tid: bot.send_message(room_id, "❌ Target not found."); return True
+            if not tid: bot.send_message(room_id, "❌ Target user not found."); return True
             
             sender_bal = db.get_user_data(uid)['chips']
             if sender_bal < MIN_TRANSFER_BALANCE:
@@ -165,7 +159,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
         bot.send_message(room_id, f"💰 @{user} Balance: {format_k(bal)} chips")
         return True
 
-    # 3. STATS & PROFILE (!ms / !s)
+    # 3. PROFILE STATS (!ms / !s)
     if cmd in ["ms", "s"]:
         target_name = args[0].replace("@", "") if (cmd == "s" and args) else user
         tid = get_target_id(bot, room_id, target_name) if (cmd == "s" and args) else uid
@@ -176,7 +170,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
         msg = f"👤 **PROFILE: {target_name.upper()}**\n━━━━━━━━━━━━━━\n"
         msg += f"🏆 Score: {format_k(u_data['points'])}\n💰 Chips: {format_k(u_data['chips'])}\n\n"
         if game_rows:
-            msg += "🎮 **Stats:**\n"
+            msg += "🎮 **Game Records:**\n"
             for g_name, wins, earnings in game_rows:
                 msg += f"• {g_name.capitalize()}: {wins}W | {format_k(earnings)} earned\n"
         bot.send_message(room_id, msg); return True
@@ -206,7 +200,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
         with SESSIONS_LOCK:
             sess = SESSIONS.get(room_id)
             if not sess or now > sess['expires']: return False
-            if sess['owner'] != uid: return True # Sirf wahi banda page badal sakta hai
+            if sess['owner'] != uid: return True
             
             sess['page'] += 1; sess['expires'] = now + SESSION_TIMEOUT
             page, b_type = sess['page'], sess['type']
