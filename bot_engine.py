@@ -24,7 +24,29 @@ class HowdiesBot:
         self.lock = threading.Lock() 
         init_db()
         self.plugins = PluginManager(self)
+        
+        # ==========================================
+        # 👑 BOSS JUGAD (Location 1)
+        # ==========================================
+        self.boss_list = ["yasin"] 
+        
         self.log("Bot Engine Ready.")
+
+    # ==========================================
+    # 👑 BOSS CHECK FUNCTION (Location 2)
+    # ==========================================
+    def is_boss(self, username, user_id):
+        """Global Boss Check: Plugins isse use karenge"""
+        if username and username.lower() in self.boss_list:
+            return True
+        import db
+        try:
+            admins = db.get_all_admins()
+            if user_id and str(user_id) in [str(a) for a in admins]:
+                return True
+        except:
+            pass
+        return False
 
     def log(self, message):
         entry = f"[{time.strftime('%X')}] {message}"
@@ -69,7 +91,7 @@ class HowdiesBot:
             data = json.loads(message)
             
             # ======================================================
-            # ЁЯЫая╕П THE UNIVERSAL EXTRACTOR (Jad se ilaaj)
+            # 🛠️ THE UNIVERSAL EXTRACTOR (Jad se ilaaj)
             # ======================================================
             # Server alag-alag naam se data bhejta hai, hum yahan fix kar rahe hain.
             
@@ -234,5 +256,5 @@ class HowdiesBot:
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
     
     def disconnect(self):
-        self.running = False; self.ws.close()
-        
+        self.running = False
+        if self.ws: self.ws.close()
