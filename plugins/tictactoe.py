@@ -8,7 +8,7 @@ import db
 import utils
 
 # ==========================================
-# ⚙️ CONFIGURATION
+# ⚙️ CONFIGURATION & REWARDS
 # ==========================================
 BOT_WIN_REWARD_CHIPS = 100
 BOT_WIN_REWARD_SCORE = 50
@@ -22,30 +22,29 @@ GAMES_LOCK = threading.Lock()
 
 def setup(bot):
     """Confirming plugin is loaded into the bot engine"""
-    print("[TicTacToe-HD] Premium Engine with DP Fix & Red Text Loaded.")
+    print("[TicTacToe-HD] FINAL COMPLETE ENGINE LOADED.")
 
 # ==========================================
 # 🖼️ IMAGE & AVATAR HELPERS
 # ==========================================
 
-def get_avatar(url, name):
-    """Robust Avatar Fetcher: Direct URL or Fallback to Placeholder"""
+def get_avatar(user_id, name):
+    """Robust Avatar Fetcher: Direct API call with fallback initials"""
     try:
-        if not url or "None" in str(url):
-            raise Exception("No URL provided")
-        
-        # Adding headers to mimic a browser for some CDN protections
+        # User ID based official Howdies Avatar URL
+        url = f"https://api.howdies.app/api/avatar/{user_id}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             return Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        raise Exception("Fetch Failed")
-    except Exception as e:
-        # Generate a cool initials-based placeholder if fetch fails
+        raise Exception
+    except:
+        # Fallback card with Initials if API fails
         img = Image.new('RGBA', (260, 260), (30, 30, 50))
         d = ImageDraw.Draw(img)
         # Using a default font to draw the first letter of name
-        utils.write_text(d, (130, 130), name[0].upper(), size=120, col="white", align="center")
+        # Note: utils.write_text uses default font if custom font fails logic is inside utils
+        utils.write_text(d, (130, 130), name[0].upper() if name else "?", size=120, col="white", align="center")
         return img
 
 def apply_round_corners(im, rad):
@@ -107,8 +106,8 @@ def draw_premium_board(board):
 
     return apply_round_corners(img, 45)
 
-def draw_victory_card(winner_name, chips_won, score_won, avatar_url):
-    """The Final Champion Card: Now with Fixed Colors and DP"""
+def draw_victory_card(winner_name, chips_won, score_won, user_id):
+    """The Final Champion Card: RED TEXT + DP Fix"""
     W, H = 600, 600
     base = utils.get_gradient(W, H, (30, 10, 60), (10, 80, 120))
     img = Image.new('RGBA', (W, H))
@@ -120,8 +119,8 @@ def draw_victory_card(winner_name, chips_won, score_won, avatar_url):
         alpha = 255 - (i * 30)
         d.rounded_rectangle([i, i, W-i, H-i], radius=50, outline=f"#FFD700{alpha:02x}", width=2)
 
-    # DP / Avatar processing
-    avatar_raw = get_avatar(avatar_url, winner_name)
+    # Avatar with robust fetcher
+    avatar_raw = get_avatar(user_id, winner_name)
     avatar = avatar_raw.resize((260, 260), Image.Resampling.LANCZOS)
     mask = Image.new('L', (260, 260), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, 260, 260), fill=255)
@@ -134,7 +133,7 @@ def draw_victory_card(winner_name, chips_won, score_won, avatar_url):
 
     # Championship Text
     utils.write_text(d, (W//2, 390), "CHAMPION", size=35, align="center", col="#FFD700", shadow=True)
-    utils.write_text(d, (W//2, 455), winner_name.upper(), size=55, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 450), winner_name.upper(), size=55, align="center", col="white", shadow=True)
 
     # REWARDS BADGE: Greenish Box + RED TEXT
     badge_w, badge_h = 420, 110
@@ -142,9 +141,9 @@ def draw_victory_card(winner_name, chips_won, score_won, avatar_url):
     # Transparent Green Box (Original style as requested)
     d.rounded_rectangle([bx, by, bx+badge_w, by+badge_h], radius=25, fill=(0, 255, 127, 40), outline="#00FF7F", width=3)
 
-    # WON CHIPS: RED TEXT (Fixed)
+    # WON CHIPS: RED COLOR (As requested)
     utils.write_text(d, (W//2, by + 30), f"WON {chips_won} CHIPS", size=32, align="center", col="#FF0000")
-    # SCORE REWARD: BLUE TEXT
+    # SCORE REWARD: BLUE COLOR
     utils.write_text(d, (W//2, by + 75), f"+{score_won} SCORE REWARD", size=26, align="center", col="#00F2FE")
 
     return apply_round_corners(img, 50)
@@ -153,15 +152,13 @@ def draw_victory_card(winner_name, chips_won, score_won, avatar_url):
 # 📦 GAME ENGINE CORE
 # ==========================================
 
-class TicTacToeBox:
-    """Isolated game logic per room to prevent data leaking"""
+class TicBox:
     def __init__(self, room_id, p1_data):
         self.room_id = room_id
         self.lock = threading.Lock()
-        self.status = "SELECT_MODE" # SELECT_MODE, LOBBY, PLAYING
+        self.status = "SELECT_MODE"
         self.last_act = time.time()
-        
-        self.p1 = p1_data # {'id', 'name', 'av'}
+        self.p1 = p1_data # {id, name}
         self.p2 = None
         self.board = [str(i+1) for i in range(9)]
         self.mode = 0 # 1=Bot, 2=PVP
@@ -169,12 +166,10 @@ class TicTacToeBox:
         self.turn = None
 
 def cleanup_room(rid):
-    """Safely destroys game box and clears memory"""
     with GAMES_LOCK:
         if rid in GAMES: del GAMES[rid]
 
 def check_victory(brd):
-    """Checks board for 3-in-a-row or Draw"""
     win_lines = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
     for a, b, c in win_lines:
         if brd[a] == brd[b] == brd[c]: return brd[a]
@@ -182,32 +177,29 @@ def check_victory(brd):
     return None
 
 def bot_brain(brd):
-    """AI logic: Win, Block, or Random"""
     lines = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
-    # Win if possible
+    # Win
     for a, b, c in lines:
         if brd[a] == 'O' and brd[b] == 'O' and brd[c] not in ['X','O']: return c
         if brd[a] == 'O' and brd[c] == 'O' and brd[b] not in ['X','O']: return b
         if brd[b] == 'O' and brd[c] == 'O' and brd[a] not in ['X','O']: return a
-    # Block Player
+    # Block
     for a, b, c in lines:
         if brd[a] == 'X' and brd[b] == 'X' and brd[c] not in ['X','O']: return c
         if brd[a] == 'X' and brd[c] == 'X' and brd[b] not in ['X','O']: return b
         if brd[b] == 'X' and brd[c] == 'X' and brd[a] not in ['X','O']: return a
-    # Random move
     valid = [i for i, x in enumerate(brd) if x not in ['X','O']]
     return random.choice(valid) if valid else None
 
 # ==========================================
-# 📡 HANDLER & COMMANDS
+# 📡 COMMAND HANDLER
 # ==========================================
 
 def handle_command(bot, cmd, room_id, user, args, data):
     uid = str(data.get('userid'))
-    avatar_url = data.get('avatar') or f"https://api.howdies.app/api/avatar/{uid}"
 
-    # !stop (ADMIN ONLY)
-    if cmd == "stop" and uid in db.get_all_admins():
+    # !stop (ADMIN ONLY - Boss Sync)
+    if cmd == "stop" and bot.is_boss(user, uid):
         if room_id in GAMES:
             cleanup_room(room_id)
             bot.send_message(room_id, "🛑 Admin forced game termination.")
@@ -218,12 +210,10 @@ def handle_command(bot, cmd, room_id, user, args, data):
         act = args[0] if args else ""
         if act == "1":
             if room_id in GAMES:
-                bot.send_message(room_id, "⚠️ A session is already active in this room.")
+                bot.send_message(room_id, "⚠️ Room Busy.")
                 return True
-            # Setup Player 1
-            p1 = {'id': uid, 'name': user, 'av': avatar_url}
             with GAMES_LOCK:
-                GAMES[room_id] = TicTacToeBox(room_id, p1)
+                GAMES[room_id] = TicBox(room_id, {'id': uid, 'name': user})
             bot.send_message(room_id, "🎮 **TIC TAC TOE SESSION START**\n\nOptions:\n1️⃣ Play with Bot\n2️⃣ PVP (Example: `2 500`)\n\n(120s timer active)")
             return True
 
@@ -231,7 +221,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
             g = GAMES.get(room_id)
             if not g: return True
             with g.lock:
-                if uid == g.p1['id'] or uid in db.get_all_admins():
+                if bot.is_boss(user, uid) or uid == g.p1['id']:
                     if g.status == "LOBBY" and g.bet > 0:
                         db.update_balance(g.p1['id'], g.p1['name'], chips_change=g.bet) # Refund P1
                     bot.send_message(room_id, "✅ Game Session Off.")
@@ -248,8 +238,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
             if not db.check_and_deduct_chips(uid, user, g.bet):
                 bot.send_message(room_id, f"❌ @{user} You need {g.bet} chips to join!")
                 return True
-            # Setup P2
-            g.p2 = {'id': uid, 'name': user, 'av': avatar_url}
+            g.p2 = {'id': uid, 'name': user}
             g.status = "PLAYING"; g.turn = g.p1['id']; g.last_act = time.time()
             url = bot.upload_to_server(draw_premium_board(g.board))
             bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": f"⚔️ Match On!\n@{g.p1['name']} vs @{g.p2['name']}\nTurn: @{g.p1['name']}"})
@@ -272,7 +261,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
             # 2. SELECT MODE PHASE
             if g.status == "SELECT_MODE" and uid == g.p1['id']:
                 if cmd == "1": # Play with Bot
-                    g.mode = 1; g.p2 = {'id': 'BOT', 'name': 'Howdies AI', 'av': ''}; g.status = "PLAYING"
+                    g.mode = 1; g.p2 = {'id': 'BOT', 'name': 'Howdies AI'}; g.status = "PLAYING"
                     g.turn = g.p1['id']; g.last_act = time.time()
                     url = bot.upload_to_server(draw_premium_board(g.board))
                     bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": "🤖 BOT MATCH STARTED!\nMove (X) with 1-9:"})
@@ -352,8 +341,8 @@ def process_finish(bot, g, res):
                 db.add_game_result(loser['id'], loser['name'], "tictactoe", -g.bet, is_win=False)
 
             # Generate Victory Graphics
-            # We pass winner['av'] which was saved during !tic 1 or !join
-            img = draw_victory_card(winner['name'], chips_reward, score_reward, winner['av'])
+            # We pass winner['id'] to fetch avatar correctly
+            img = draw_victory_card(winner['name'], chips_reward, score_reward, winner['id'])
             url = bot.upload_to_server(img)
             bot.send_json({"handler": "chatroommessage", "roomid": g.room_id, "type": "image", "url": url, "text": f"🏆 {winner['name']} Won!"})
             
