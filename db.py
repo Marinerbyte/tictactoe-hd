@@ -16,7 +16,7 @@ def get_connection():
         return conn
     else:
         conn = sqlite3.connect("bot.db", check_same_thread=False, timeout=20)
-        conn.isolation_level = None # Autocommit enabled
+        conn.isolation_level = None 
         return conn
 
 def get_ph():
@@ -30,6 +30,7 @@ def init_db():
             if not DATABASE_URL.startswith("postgres"):
                 cur.execute("PRAGMA journal_mode=WAL")
             
+            # --- USERS & ECONOMY ---
             cur.execute("""CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY, 
                 username TEXT, 
@@ -38,6 +39,7 @@ def init_db():
                 wins INTEGER DEFAULT 0
             )""")
             
+            # --- GAME STATS ---
             cur.execute("""CREATE TABLE IF NOT EXISTS game_stats (
                 user_id TEXT, 
                 game_name TEXT, 
@@ -46,12 +48,17 @@ def init_db():
                 PRIMARY KEY (user_id, game_name)
             )""")
             
+            # --- ADMINS ---
             cur.execute("CREATE TABLE IF NOT EXISTS bot_admins (user_id TEXT PRIMARY KEY)")
-            print("[DB] Tables Ready.")
+            
+            # --- GUIDES (MISSING PART) ---
+            cur.execute("CREATE TABLE IF NOT EXISTS game_guides (game_name TEXT PRIMARY KEY, description TEXT)")
+            
+            print("[DB] Tables Initialized.")
         except: traceback.print_exc()
         finally: conn.close()
 
-# --- CORE FUNCTIONS ---
+# --- ECONOMY CORE ---
 
 def get_user_data(user_id, username="Unknown"):
     ph = get_ph()
@@ -64,7 +71,7 @@ def get_user_data(user_id, username="Unknown"):
             row = cur.fetchone()
             if row: return {"points": row[0], "chips": row[1]}
             
-            # Auto Create if missing
+            # Auto Create
             cur.execute(f"INSERT INTO users (user_id, username) VALUES ({ph}, {ph})", (uid, str(username)))
             return {"points": 0, "chips": 10000}
         except: 
@@ -76,7 +83,6 @@ def update_balance(user_id, username, chips_change=0, points_change=0):
     ph = get_ph()
     uid = str(user_id)
     
-    # Ensure user exists
     get_user_data(uid, username)
     
     with db_lock:
@@ -117,10 +123,8 @@ def add_game_result(user_id, username, game_name, chips_won, is_win=False, point
         conn = get_connection()
         try:
             cur = conn.cursor()
-            # Update Total Wins
             cur.execute(f"UPDATE users SET wins = wins + {ph} WHERE user_id = {ph}", (1 if is_win else 0, uid))
             
-            # Update Game Stats
             upsert = f"""INSERT INTO game_stats (user_id, game_name, wins, earnings) 
                          VALUES ({ph}, {ph}, {ph}, {ph}) 
                          ON CONFLICT(user_id, game_name) DO UPDATE SET 
@@ -129,6 +133,8 @@ def add_game_result(user_id, username, game_name, chips_won, is_win=False, point
             cur.execute(upsert, (uid, str(game_name).lower(), 1 if is_win else 0, int(chips_won)))
         except: traceback.print_exc()
         finally: conn.close()
+
+# --- ADMINS ---
 
 def add_admin(user_id):
     ph = get_ph()
@@ -148,5 +154,40 @@ def get_all_admins():
             cur = conn.cursor()
             cur.execute("SELECT user_id FROM bot_admins")
             return [str(r[0]) for r in cur.fetchall()]
+        except: return []
+        finally: conn.close()
+
+# --- GUIDES (MISSING FUNCTIONS ADDED) ---
+
+def save_guide(g, d):
+    ph = get_ph()
+    with db_lock:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"INSERT INTO game_guides (game_name, description) VALUES ({ph}, {ph}) ON CONFLICT(game_name) DO UPDATE SET description = EXCLUDED.description", (str(g).lower(), str(d)))
+            return True
+        except: return False
+        finally: conn.close()
+
+def get_guide(g):
+    ph = get_ph()
+    with db_lock:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT description FROM game_guides WHERE game_name = {ph}", (str(g).lower(),))
+            r = cur.fetchone()
+            return r[0] if r else None
+        except: return None
+        finally: conn.close()
+
+def get_all_guide_names():
+    with db_lock:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT game_name FROM game_guides")
+            return [r[0] for r in cur.fetchall()]
         except: return []
         finally: conn.close()
