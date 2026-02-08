@@ -26,13 +26,11 @@ class HowdiesBot:
         self.plugins = PluginManager(self)
         
         # ==========================================
-        # 👑 BOSS JUGAD
+        # 👑 BOSS JUGAD (Centralized)
         # ==========================================
         self.boss_list = ["yasin"] 
-        
-        # Connection Guard: Duplicate threads rokne ke liye
-        self.is_connecting = False
-        
+        self.is_connecting = False # Duplicate threads guard
+
         self.log("Bot Engine Ready.")
 
     def is_boss(self, username, user_id):
@@ -74,14 +72,14 @@ class HowdiesBot:
         
         with self.lock:
             if self.is_connecting:
-                self.log("Duplicate connection attempt blocked.")
+                self.log("Duplicate thread prevented. Already connecting...")
                 return
             self.is_connecting = True
 
-        # 🔥 GHOST KILLER: Purana socket khula hai to band karo
+        # 🔥 GHOST KILLER: Naya connection shuru karne se pehle purana socket band karo
         if self.ws:
+            self.log("Killing old WebSocket instance...")
             try:
-                self.log("Forcing closure of existing connection...")
                 self.ws.keep_running = False
                 self.ws.close()
             except: pass
@@ -97,6 +95,7 @@ class HowdiesBot:
         )
         
         self.running = True
+        # Ping Interval 20s (Taaki connection stable rahe)
         self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=20, ping_timeout=10))
         self.ws_thread.daemon = True
         self.ws_thread.start()
@@ -136,7 +135,6 @@ class HowdiesBot:
 
             if final_username: data["username"] = final_username
             if final_userid: data["userid"] = str(final_userid)
-            
             # ======================================================
 
             handler = data.get("handler")
@@ -171,7 +169,8 @@ class HowdiesBot:
                     mtype = 'bot' if author == self.user_data.get('username') else 'user'
                     with self.lock:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
-                        if len(self.room_details[room_name]['chat_log']) > 50: self.room_details[room_name]['chat_log'].pop(0)
+                        if len(self.room_details[room_name]['chat_log']) > 50: 
+                            self.room_details[room_name]['chat_log'].pop(0)
                 self.plugins.process_message(data)
 
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
@@ -216,15 +215,16 @@ class HowdiesBot:
         with self.lock:
             self.is_connecting = False
 
-    def on_close(self, ws, close_status, close_msg): 
-        self.log(f"WS Closed: {close_status} - {close_msg}")
+    def on_close(self, ws, code, msg): 
+        self.log(f"WS Closed: {code} - {msg}")
         with self.lock:
             self.is_connecting = False
         
         if self.running: 
-            # Agar error code 1000 (Normal) hai, toh wait badhao (Ghost conflict fix)
-            delay = 10 if close_status == 1000 else 5
-            self.log(f"Reconnecting in {delay}s...")
+            # 🛑 CONFLICT AVOIDANCE: Agar 1000 (Conflict) hai toh 30 second ruko
+            # Taaki purana Ghost Bot server se clear ho jaye
+            delay = 30 if code == 1000 else 10
+            self.log(f"Reconnecting in {delay}s to avoid ghost conflict...")
             time.sleep(delay)
             threading.Thread(target=self.connect_ws, daemon=True).start()
 
@@ -247,10 +247,8 @@ class HowdiesBot:
 
             url = "https://api.howdies.app/api/upload"
             mime = 'image/gif' if file_type.lower() == 'gif' else 'image/png'
-            files = {'file': (f'upload.{file_type}', image_bytes, mime)}
-            data = {'token': self.token, 'uploadType': 'image', 'UserID': self.user_id if self.user_id else 0}
-            
-            r = requests.post(url, files=files, data=data, timeout=15)
+            files = {'file': (f'u.{file_type}', image_bytes, mime)}
+            r = requests.post(url, files=files, data={'token': self.token, 'uploadType': 'image', 'UserID': self.user_id if self.user_id else 0}, timeout=15)
             if r.status_code == 200:
                 res = r.json()
                 return res.get('url') or res.get('data', {}).get('url')
@@ -269,7 +267,9 @@ class HowdiesBot:
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
     
     def disconnect(self):
+        self.log("Disconnecting...")
         self.running = False
         with self.lock:
             self.is_connecting = False
-        if self.ws: self.ws.close()
+        if self.ws: 
+            self.ws.close()
