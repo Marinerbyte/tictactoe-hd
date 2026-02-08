@@ -16,7 +16,7 @@ def get_connection():
         return conn
     else:
         conn = sqlite3.connect("bot.db", check_same_thread=False, timeout=20)
-        conn.isolation_level = None # Autocommit mode
+        conn.isolation_level = None # Autocommit enabled
         return conn
 
 def get_ph():
@@ -30,7 +30,6 @@ def init_db():
             if not DATABASE_URL.startswith("postgres"):
                 cur.execute("PRAGMA journal_mode=WAL")
             
-            # TABLES
             cur.execute("""CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY, 
                 username TEXT, 
@@ -48,7 +47,7 @@ def init_db():
             )""")
             
             cur.execute("CREATE TABLE IF NOT EXISTS bot_admins (user_id TEXT PRIMARY KEY)")
-            print("[DB] Tables Initialized.")
+            print("[DB] Tables Ready.")
         except: traceback.print_exc()
         finally: conn.close()
 
@@ -65,7 +64,7 @@ def get_user_data(user_id, username="Unknown"):
             row = cur.fetchone()
             if row: return {"points": row[0], "chips": row[1]}
             
-            # Auto Create
+            # Auto Create if missing
             cur.execute(f"INSERT INTO users (user_id, username) VALUES ({ph}, {ph})", (uid, str(username)))
             return {"points": 0, "chips": 10000}
         except: 
@@ -118,8 +117,10 @@ def add_game_result(user_id, username, game_name, chips_won, is_win=False, point
         conn = get_connection()
         try:
             cur = conn.cursor()
+            # Update Total Wins
             cur.execute(f"UPDATE users SET wins = wins + {ph} WHERE user_id = {ph}", (1 if is_win else 0, uid))
             
+            # Update Game Stats
             upsert = f"""INSERT INTO game_stats (user_id, game_name, wins, earnings) 
                          VALUES ({ph}, {ph}, {ph}, {ph}) 
                          ON CONFLICT(user_id, game_name) DO UPDATE SET 
