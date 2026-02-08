@@ -16,7 +16,7 @@ SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 def setup(bot):
-    print("[Economy] Final Ledger System Loaded (Emoji-Free).")
+    print("[Economy] FINAL PRODUCTION ENGINE V5.0 LOADED.")
 
 # --- HELPERS ---
 
@@ -29,7 +29,7 @@ def purge_expired_sessions():
             del SESSIONS[k]
 
 def format_k(n):
-    """Clean K-Notation (1k, 1.1k, 1.5k, 2k)"""
+    """Clean K-Notation (1k, 1.1k, 2k) with Safe Exception Handling"""
     try:
         n = int(n)
         if n < 1000: return str(n)
@@ -42,17 +42,16 @@ def format_k(n):
         return "0"
 
 def get_symbol(rank, board_type):
-    # EMOJI-FREE SYMBOLS
-    if rank == 1: return "[*]" if board_type == "gls" else "($)"
-    if rank <= 3: return ">>"
-    return "-"
+    if rank == 1: return "👑" if board_type == "gls" else "💎"
+    if rank <= 3: return "⭐"
+    return "•"
 
 def get_target_info(bot, room_id, name):
-    """Robust Target Fetcher: Error-proof online/offline check"""
+    """Super-Searcher: Pehle online dhoondo, fir offline (DB me)"""
     if not name: return None, None
     clean_name = name.replace("@", "").strip().lower()
     
-    # 1. Online Users Cache Check
+    # 1. Search ALL online rooms
     for r_name in bot.room_details:
         id_map = bot.room_details[r_name].get('id_map', {})
         if clean_name in id_map:
@@ -61,20 +60,36 @@ def get_target_info(bot, room_id, name):
             actual_name = next((u for u in users_list if u.lower() == clean_name), name)
             return uid, actual_name
 
-    # 2. Database Deep Search
+    # 2. Search DATABASE (agar offline hai)
     conn = db.get_connection()
     try:
         cur = conn.cursor()
         ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
         cur.execute(f"SELECT user_id, username FROM users WHERE LOWER(username) = {ph} LIMIT 1", (clean_name,))
         row = cur.fetchone()
-        return (str(row[0]), row[1]) if row else (None, None)
+        if row:
+            return str(row[0]), row[1]
     except Exception as e:
         print(f"DB Search Error: {e}")
     finally:
         conn.close()
         
-    return None, None
+    return None, None # Kahin nahi mila
+
+def get_detailed_stats(user_id):
+    """Universal Game Stats: DB se sab data uthayega (FIXED)"""
+    conn = db.get_connection()
+    try:
+        cur = conn.cursor()
+        ph = "%s" if db.DATABASE_URL.startswith("postgres") else "?"
+        cur.execute(f"SELECT game_name, wins, earnings FROM game_stats WHERE user_id = {ph}", (str(user_id),))
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        print(f"Error fetching detailed stats: {e}")
+        return []
+    finally:
+        conn.close()
 
 # ==========================================
 # 📡 COMMAND HANDLER
@@ -108,7 +123,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
                 else: bot.send_message(room_id, f"[!] User '{args[0]}' not found.")
                 return True
 
-            # !wipedb confirm
+            # Baaki Admin Commands...
             if cmd == "wipedb" and args and args[0] == "confirm":
                 conn = db.get_connection(); cur = conn.cursor()
                 try:
@@ -132,7 +147,8 @@ def handle_command(bot, cmd, room_id, user, args, data):
             if not tid: bot.send_message(room_id, "[!] User not found."); return True
             
             u_data = db.get_user_data(tid, real_name)
-            game_rows = get_detailed_stats(tid)
+            game_rows = get_detailed_stats(tid) # YAHAN ERROR THA
+            
             msg = f"--- PROFILE: {real_name.upper()} ---\n"
             msg += f"[*] Score: {format_k(u_data['points'])}\n"
             msg += f"($) Chips: {format_k(u_data['chips'])}\n\n"
@@ -142,7 +158,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
                     msg += f"- {g_name.capitalize()}: {wins}W | {format_k(earnings)} won\n"
             bot.send_message(room_id, msg); return True
 
-        # !gls / !chips
+        # LEADERBOARDS & NEXT PAGE
         if cmd in ["gls", "chips"]:
             purge_expired_sessions()
             b_type = "gls"; col = "points"; title = "GLOBAL SCORE RANK"
@@ -163,7 +179,6 @@ def handle_command(bot, cmd, room_id, user, args, data):
                 SESSIONS[f"{room_id}_{uid}"] = {'type': b_type, 'page': 0, 'expires': now + SESSION_TIMEOUT}
             bot.send_message(room_id, msg); return True
 
-        # !nx
         if cmd == "nx":
             sess_key = f"{room_id}_{uid}"
             with SESSIONS_LOCK:
