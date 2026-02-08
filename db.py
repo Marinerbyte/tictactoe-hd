@@ -3,12 +3,17 @@ import sqlite3
 import psycopg2
 import threading
 import time
+import traceback
 from urllib.parse import urlparse
 
+# ==========================================
+# ⚙️ CONFIGURATION & LOCKING
+# ==========================================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
 db_lock = threading.Lock()
 
 def get_connection():
+    """Universal Connection Handler with WAL Mode support for SQLite"""
     if DATABASE_URL.startswith("postgres"):
         try:
             return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -19,15 +24,30 @@ def get_connection():
                 password=result.password, host=result.hostname, port=result.port
             )
     else:
-        # Timeout badha diya taaki "Database Locked" error na aaye
-        return sqlite3.connect("bot.db", check_same_thread=False, timeout=10)
+        # isolation_level=None enable karta hai autocommit mode jo WAL mode ke liye best hai
+        conn = sqlite3.connect("bot.db", check_same_thread=False, timeout=20, isolation_level=None)
+        return conn
+
+def get_ph():
+    """Consistent Placeholder Handling"""
+    return "%s" if DATABASE_URL.startswith("postgres") else "?"
+
+# ==========================================
+# 🚀 INITIALIZATION
+# ==========================================
 
 def init_db():
+    """Initializes tables and sets performance pragmas"""
     with db_lock:
         conn = get_connection()
-        cur = conn.cursor()
         try:
-            # Users Table
+            cur = conn.cursor()
+            # SQLite Performance Boost: Journaling Mode WAL
+            if not DATABASE_URL.startswith("postgres"):
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA synchronous=NORMAL")
+
+            # Users Table: Score and Currency
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY, 
@@ -37,7 +57,7 @@ def init_db():
                     wins INTEGER DEFAULT 0
                 )
             """)
-            # Game Stats Table
+            # Game Stats: Match Analytics (Wins/Earnings)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS game_stats (
                     user_id TEXT, 
@@ -47,152 +67,177 @@ def init_db():
                     PRIMARY KEY (user_id, game_name)
                 )
             """)
-            # Admins Table
+            # Admin Registry
             cur.execute("CREATE TABLE IF NOT EXISTS bot_admins (user_id TEXT PRIMARY KEY)")
-            conn.commit()
-            print("[DB] Database Connected & Tables Ready.")
-        except Exception as e:
-            print(f"[DB Error] Init Failed: {e}")
+            
+            print("[DB] Industrial Grade Engine Initialized.")
+        except Exception:
+            print("[DB Critical] Init Failed!")
+            traceback.print_exc()
         finally:
             conn.close()
 
-# --- ECONOMY CORE (SAFE MODE) ---
+# ==========================================
+# 💰 ECONOMY CORE (Units: points=Score, chips=Currency)
+# ==========================================
 
-def get_user_data(user_id):
-    """User ka data laata hai, agar nahi hai to create karta hai"""
-    with db_lock:
-        conn = get_connection()
-        try:
-            cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            cur.execute(f"SELECT points, chips FROM users WHERE user_id = {ph}", (str(user_id),))
-            row = cur.fetchone()
-            if row: 
-                return {"points": row[0], "chips": row[1]}
-            return {"points": 0, "chips": 10000} # Default values
-        except Exception as e:
-            print(f"[DB Error] Get Data: {e}")
-            return {"points": 0, "chips": 0}
-        finally:
-            conn.close()
-
-def update_balance(user_id, username, chips_change=0, points_change=0):
-    """Safe Update function - Ye fail nahi hoga"""
-    if not user_id or user_id == "BOT": return False
+def get_user_data(user_id, username="Unknown User"):
+    """Fetches or auto-creates user with consistent 10k default chips"""
+    ph = get_ph()
+    uid = str(user_id)
+    uname = str(username).strip()
     
     with db_lock:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            uid = str(user_id)
+            cur.execute(f"SELECT points, chips FROM users WHERE user_id = {ph}", (uid,))
+            row = cur.fetchone()
+            if row:
+                return {"points": row[0], "chips": row[1]}
             
-            # 1. Ensure User Exists
+            # Auto-Fill: Naya user register karo agar nahi hai
+            cur.execute(f"INSERT INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0)", (uid, uname))
+            return {"points": 0, "chips": 10000}
+        except Exception:
+            traceback.print_exc()
+            return {"points": 0, "chips": 10000} # Consistent default fallback
+        finally:
+            conn.close()
+
+def update_balance(user_id, username, chips_change=0, points_change=0):
+    """
+    Atomic Balance Update with Type Safety and Sanitized Upsert.
+    chips_change: Amount to add/sub from currency.
+    points_change: Amount to add/sub from permanent score.
+    """
+    if not user_id or str(user_id) == "BOT": return False
+    
+    ph = get_ph()
+    uid, uname = str(user_id), str(username).strip()
+    # Integer Casting for Safety
+    c_delta, p_delta = int(chips_change), int(points_change)
+
+    with db_lock:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            # High-Performance UPSERT
             if DATABASE_URL.startswith("postgres"):
-                cur.execute(f"INSERT INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0) ON CONFLICT (user_id) DO NOTHING", (uid, username))
+                cur.execute(f"""
+                    INSERT INTO users (user_id, username, points, chips, wins) 
+                    VALUES ({ph}, {ph}, 0, 10000, 0) 
+                    ON CONFLICT (user_id) DO UPDATE SET username = EXCLUDED.username
+                """, (uid, uname))
             else:
-                cur.execute(f"INSERT OR IGNORE INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0)", (uid, username))
+                cur.execute(f"INSERT OR IGNORE INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0)", (uid, uname))
             
-            # 2. Update Balance
-            cur.execute(f"UPDATE users SET points = points + {ph}, chips = chips + {ph} WHERE user_id = {ph}", (points_change, chips_change, uid))
-            conn.commit()
+            cur.execute(f"UPDATE users SET points = points + {ph}, chips = chips + {ph} WHERE user_id = {ph}", (p_delta, c_delta, uid))
             return True
-        except Exception as e:
-            print(f"[DB Error] Update Balance: {e}")
+        except Exception:
+            traceback.print_exc()
             return False
         finally:
             conn.close()
 
 def check_and_deduct_chips(user_id, username, amount):
-    """Betting ke liye deduction logic"""
-    if amount < 0: return False
+    """Betting Guard: Atomic check and partial-deduction protection"""
+    amt = int(amount)
+    if amt < 0: return False
+    ph = get_ph()
+    uid = str(user_id)
+    
+    # User guarantee
+    update_balance(user_id, username, 0, 0)
+
     with db_lock:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            uid = str(user_id)
-            
-            # Ensure user exists first
-            if DATABASE_URL.startswith("postgres"):
-                cur.execute(f"INSERT INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0) ON CONFLICT (user_id) DO NOTHING", (uid, username))
-            else:
-                cur.execute(f"INSERT OR IGNORE INTO users (user_id, username, points, chips, wins) VALUES ({ph}, {ph}, 0, 10000, 0)", (uid, username))
-
-            # Check Balance
             cur.execute(f"SELECT chips FROM users WHERE user_id = {ph}", (uid,))
             row = cur.fetchone()
             
-            if row and row[0] >= amount:
-                cur.execute(f"UPDATE users SET chips = chips - {ph} WHERE user_id = {ph}", (amount, uid))
-                conn.commit()
+            if row and row[0] >= amt:
+                cur.execute(f"UPDATE users SET chips = chips - {ph} WHERE user_id = {ph}", (amt, uid))
                 return True
             return False
-        except Exception as e:
-            print(f"[DB Error] Deduct: {e}")
+        except Exception:
+            traceback.print_exc()
             return False
         finally:
             conn.close()
 
+# ==========================================
+# 🎮 GAME ANALYTICS
+# ==========================================
+
 def add_game_result(user_id, username, game_name, chips_won, is_win=False, points_reward=0):
-    """Game ka Result Save karna"""
-    if not user_id or user_id == "BOT": return
+    """Saves match analytics using industrial Upsert logic and normalization"""
+    if not user_id or str(user_id) == "BOT": return
     
-    # Pehle Balance Update karo
+    # Update master wallet and score
     update_balance(user_id, username, chips_won, points_reward)
     
+    ph = get_ph()
+    uid = str(user_id)
+    # Case Normalization and Stripping
+    g_name = str(game_name).lower().strip()
+    win_val = 1 if is_win else 0
+    c_won = int(chips_won)
+
     with db_lock:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            uid = str(user_id)
-            win_val = 1 if is_win else 0
-            
-            # Update Total Wins
+            # Update Master Wins count
             cur.execute(f"UPDATE users SET wins = wins + {ph} WHERE user_id = {ph}", (win_val, uid))
             
-            # Update Game Specific Stats
-            # (Simplified check for SQLite/Postgres compatibility)
-            cur.execute(f"SELECT wins FROM game_stats WHERE user_id={ph} AND game_name={ph}", (uid, game_name))
-            if cur.fetchone():
-                cur.execute(f"UPDATE game_stats SET wins=wins+{ph}, earnings=earnings+{ph} WHERE user_id={ph} AND game_name={ph}", (win_val, chips_won, uid, game_name))
-            else:
-                cur.execute(f"INSERT INTO game_stats (user_id, game_name, wins, earnings) VALUES ({ph}, {ph}, {ph}, {ph})", (uid, game_name, win_val, chips_won))
-                
-            conn.commit()
-        except Exception as e:
-            print(f"[DB Error] Game Result: {e}")
+            # Atomic Stats UPSERT (SQLite 3.24+ and Postgres compatible)
+            upsert_query = f"""
+                INSERT INTO game_stats (user_id, game_name, wins, earnings) 
+                VALUES ({ph}, {ph}, {ph}, {ph})
+                ON CONFLICT(user_id, game_name) DO UPDATE SET 
+                wins = game_stats.wins + EXCLUDED.wins,
+                earnings = game_stats.earnings + EXCLUDED.earnings
+            """
+            cur.execute(upsert_query, (uid, g_name, win_val, c_won))
+        except Exception:
+            print(f"[DB Error] add_game_result fail for {g_name}")
+            traceback.print_exc()
         finally:
             conn.close()
 
-# --- ADMIN HELPERS ---
+# ==========================================
+# 👑 ADMIN MANAGEMENT
+# ==========================================
+
 def add_admin(user_id):
+    """Registers a new admin into the database registry"""
+    ph = get_ph()
+    uid = str(user_id)
     with db_lock:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            ph = "%s" if DATABASE_URL.startswith("postgres") else "?"
-            if DATABASE_URL.startswith("postgres"):
-                cur.execute(f"INSERT INTO bot_admins (user_id) VALUES ({ph}) ON CONFLICT (user_id) DO NOTHING", (str(user_id),))
-            else:
-                cur.execute(f"INSERT OR IGNORE INTO bot_admins (user_id) VALUES ({ph})", (str(user_id),))
-            conn.commit()
-            print(f"[DB] Admin Added: {user_id}")
+            # Clean ON CONFLICT syntax
+            cur.execute(f"INSERT INTO bot_admins (user_id) VALUES ({ph}) ON CONFLICT(user_id) DO NOTHING", (uid,))
             return True
-        except Exception as e:
-            print(f"[DB Error] Add Admin: {e}")
+        except Exception:
+            traceback.print_exc()
             return False
         finally:
             conn.close()
 
 def get_all_admins():
+    """Returns a list of all registered Admin IDs"""
     with db_lock:
         conn = get_connection()
         try:
             cur = conn.cursor()
             cur.execute("SELECT user_id FROM bot_admins")
-            rows = [item[0] for item in cur.fetchall()]
-            return rows
-        except: return []
-        finally: conn.close()
+            return [str(item[0]) for item in cur.fetchall()]
+        except Exception:
+            traceback.print_exc()
+            return []
+        finally:
+            conn.close()
