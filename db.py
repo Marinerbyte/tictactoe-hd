@@ -16,7 +16,7 @@ def get_connection():
         return conn
     else:
         conn = sqlite3.connect("bot.db", check_same_thread=False, timeout=20)
-        conn.isolation_level = None
+        conn.isolation_level = None # Autocommit mode
         return conn
 
 def get_ph():
@@ -32,7 +32,7 @@ def init_db():
             cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, username TEXT, points BIGINT DEFAULT 0, chips BIGINT DEFAULT 10000, wins INTEGER DEFAULT 0)")
             cur.execute("CREATE TABLE IF NOT EXISTS game_stats (user_id TEXT, game_name TEXT, wins INTEGER DEFAULT 0, earnings BIGINT DEFAULT 0, PRIMARY KEY (user_id, game_name))")
             cur.execute("CREATE TABLE IF NOT EXISTS bot_admins (user_id TEXT PRIMARY KEY)")
-            print("[DB] Polished Engine Initialized.")
+            print("[DB] Final Foundation Initialized.")
         except: traceback.print_exc()
         finally: conn.close()
 
@@ -58,10 +58,7 @@ def update_balance(user_id, username, chips_change=0, points_change=0):
     ph = get_ph()
     uid, uname = str(user_id), str(username)
     c_delta, p_delta = int(chips_change), int(points_change)
-    
-    # Ensure user exists
-    get_user_data(uid, uname)
-    
+    get_user_data(uid, uname) # Ensure user exists
     with db_lock:
         conn = get_connection()
         try:
