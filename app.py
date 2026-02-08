@@ -15,42 +15,37 @@ bot = HowdiesBot()
 register_routes(app, bot)
 
 # ==========================================
-# 🚀 AUTO-PILOT LOGIC (GUNICORN FRIENDLY)
+# 🚀 GHOST-PROOF AUTO PILOT
 # ==========================================
-# Is function ko hum file load hote hi call karenge
 def start_auto_pilot():
     auto_user = os.environ.get("AUTO_USER")
     auto_pass = os.environ.get("AUTO_PASS")
 
     if auto_user and auto_pass:
-        print(f"[Auto-Pilot] Credentials found for: {auto_user}")
+        print(f"[Auto-Pilot] Config found for {auto_user}")
         
         def runner():
-            # 5 Second wait taaki server fully ready ho jaye
-            time.sleep(5)
+            # 🛑 30 SECONDS DELAY: Taaki Render purane bot ko kill kar sake
+            print("[Auto-Pilot] Waiting 30s for session cleanup...")
+            time.sleep(30)
             
-            # Check if already running (Restart prevention)
             if bot.running or bot.token:
-                print("[Auto-Pilot] Bot already running. Skipping.")
+                print("[Auto-Pilot] Bot already active via UI. Skipping.")
                 return
 
-            print("[Auto-Pilot] Connecting...")
+            print("[Auto-Pilot] Attempting Fresh Connection...")
             success, msg = bot.login_api(auto_user, auto_pass)
-            
             if success:
                 bot.connect_ws()
                 bot.start_time = time.time()
                 bot.plugins.load_plugins()
-                print(f"[Auto-Pilot] ✅ SUCCESS: Bot Connected automatically!")
+                print(f"[Auto-Pilot] ✅ SUCCESS: Bot is ONLINE.")
             else:
                 print(f"[Auto-Pilot] ❌ FAILED: {msg}")
 
-        # Thread start
         threading.Thread(target=runner, daemon=True).start()
-    else:
-        print("[Auto-Pilot] No credentials found (AUTO_USER/AUTO_PASS missing).")
 
-# 🔥 ISKO BAHAR CALL KARO (Taki Render isse ignore na kare)
+# Call Auto Pilot
 start_auto_pilot()
 
 if __name__ == "__main__":
