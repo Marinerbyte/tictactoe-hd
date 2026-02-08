@@ -25,24 +25,24 @@ class HowdiesBot:
         init_db()
         self.plugins = PluginManager(self)
         
-        # ==========================================
-        # 👑 BOSS JUGAD (Centralized)
-        # ==========================================
-        self.boss_list = ["yasin"] 
-        self.is_connecting = False # Duplicate threads guard
-
+        # --- BOSS SETTINGS ---
+        self.boss_list = ["yasin"] # Yahan Boss ka naam set hai
+        
         self.log("Bot Engine Ready.")
 
     def is_boss(self, username, user_id):
         """Global Boss Check: Plugins isse use karenge"""
+        # 1. Hardcoded naam check
         if username and username.lower() in self.boss_list:
             return True
+        # 2. Database admin check
         import db
         try:
             admins = db.get_all_admins()
             if user_id and str(user_id) in [str(a) for a in admins]:
                 return True
-        except: pass
+        except:
+            pass
         return False
 
     def log(self, message):
@@ -69,74 +69,30 @@ class HowdiesBot:
 
     def connect_ws(self):
         if not self.token: return
-        
-        with self.lock:
-            if self.is_connecting:
-                self.log("Duplicate thread prevented. Already connecting...")
-                return
-            self.is_connecting = True
-
-        # 🔥 GHOST KILLER: Naya connection shuru karne se pehle purana socket band karo
-        if self.ws:
-            self.log("Killing old WebSocket instance...")
-            try:
-                self.ws.keep_running = False
-                self.ws.close()
-            except: pass
-
         self.log("WebSocket Connecting...")
         url = WS_URL.format(self.token)
-        self.ws = websocket.WebSocketApp(
-            url, 
-            on_open=self.on_open, 
-            on_message=self.on_message, 
-            on_error=self.on_error, 
-            on_close=self.on_close
-        )
-        
+        self.ws = websocket.WebSocketApp(url, on_open=self.on_open, on_message=self.on_message, on_error=self.on_error, on_close=self.on_close)
         self.running = True
-        # Ping Interval 20s (Taaki connection stable rahe)
-        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=20, ping_timeout=10))
-        self.ws_thread.daemon = True
-        self.ws_thread.start()
+        self.ws_thread = threading.Thread(target=lambda: self.ws.run_forever(ping_interval=15, ping_timeout=10)); self.ws_thread.daemon = True; self.ws_thread.start()
 
     def on_open(self, ws):
-        with self.lock:
-            self.is_connecting = False
         self.log("WebSocket Connected.")
         self.send_json({"handler": "login", "username": self.user_data.get('username'), "password": self.user_data.get('password')})
-        
         with self.lock:
             rooms = list(self.active_rooms)
-        for room in rooms: 
-            self.join_room(room)
+        for room in rooms: self.join_room(room)
 
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
             
-            # ======================================================
-            # 🛠️ THE UNIVERSAL EXTRACTOR (Jad se ilaaj)
-            # ======================================================
-            final_username = (
-                data.get("username") or 
-                data.get("from") or 
-                data.get("sender") or 
-                data.get("to")
-            )
-            
-            final_userid = (
-                data.get("userid") or 
-                data.get("userId") or 
-                data.get("id") or 
-                data.get("user_id") or
-                data.get("from_id")
-            )
+            # Universal Extractor Logic
+            final_username = data.get("username") or data.get("from") or data.get("sender") or data.get("to")
+            final_userid = data.get("userid") or data.get("userId") or data.get("id") or data.get("user_id") or data.get("from_id")
 
             if final_username: data["username"] = final_username
             if final_userid: data["userid"] = str(final_userid)
-            # ======================================================
-
+            
             handler = data.get("handler")
 
             if hasattr(self.plugins, 'process_system_message'):
@@ -154,12 +110,7 @@ class HowdiesBot:
 
             if room_name and room_name not in self.room_details:
                 with self.lock:
-                    self.room_details[room_name] = {
-                        'id': room_id, 
-                        'users': [], 
-                        'id_map': {}, 
-                        'chat_log': []
-                    }
+                    self.room_details[room_name] = {'id': room_id, 'users': [], 'id_map': {}, 'chat_log': []}
                     if room_name not in self.active_rooms: self.active_rooms.append(room_name)
                     if room_id: self.room_id_to_name_map[room_id] = room_name
 
@@ -169,8 +120,6 @@ class HowdiesBot:
                     mtype = 'bot' if author == self.user_data.get('username') else 'user'
                     with self.lock:
                         self.room_details[room_name]['chat_log'].append({'author': author, 'text': data.get('text', ''), 'type': mtype})
-                        if len(self.room_details[room_name]['chat_log']) > 50: 
-                            self.room_details[room_name]['chat_log'].pop(0)
                 self.plugins.process_message(data)
 
             elif handler in ["message", "privatemessage"] and not data.get("roomid"):
@@ -210,29 +159,13 @@ class HowdiesBot:
         except Exception as e:
             traceback.print_exc()
     
-    def on_error(self, ws, error): 
-        self.log(f"WS Error: {error}")
-        with self.lock:
-            self.is_connecting = False
-
-    def on_close(self, ws, code, msg): 
-        self.log(f"WS Closed: {code} - {msg}")
-        with self.lock:
-            self.is_connecting = False
-        
+    def on_error(self, ws, error): self.log(f"WS Error: {error}")
+    def on_close(self, ws, _, __): 
         if self.running: 
-            # 🛑 CONFLICT AVOIDANCE: Agar 1000 (Conflict) hai toh 30 second ruko
-            # Taaki purana Ghost Bot server se clear ho jaye
-            delay = 30 if code == 1000 else 10
-            self.log(f"Reconnecting in {delay}s to avoid ghost conflict...")
-            time.sleep(delay)
-            threading.Thread(target=self.connect_ws, daemon=True).start()
+            time.sleep(5); threading.Thread(target=self.connect_ws, daemon=True).start()
 
     def send_json(self, data):
-        try:
-            if self.ws and self.ws.sock and self.ws.sock.connected: 
-                self.ws.send(json.dumps(data))
-        except: pass
+        if self.ws and self.ws.sock and self.ws.sock.connected: self.ws.send(json.dumps(data))
 
     def send_message(self, room_id, text):
         self.send_json({"handler": "chatroommessage", "id": uuid.uuid4().hex, "type": "text", "roomid": room_id, "text": text})
@@ -244,11 +177,11 @@ class HowdiesBot:
                 img_byte_arr = io.BytesIO()
                 image_bytes.save(img_byte_arr, format=file_type.upper())
                 image_bytes = img_byte_arr.getvalue()
-
             url = "https://api.howdies.app/api/upload"
             mime = 'image/gif' if file_type.lower() == 'gif' else 'image/png'
-            files = {'file': (f'u.{file_type}', image_bytes, mime)}
-            r = requests.post(url, files=files, data={'token': self.token, 'uploadType': 'image', 'UserID': self.user_id if self.user_id else 0}, timeout=15)
+            files = {'file': (f'upload.{file_type}', image_bytes, mime)}
+            data = {'token': self.token, 'uploadType': 'image', 'UserID': self.user_id if self.user_id else 0}
+            r = requests.post(url, files=files, data=data, timeout=15)
             if r.status_code == 200:
                 res = r.json()
                 return res.get('url') or res.get('data', {}).get('url')
@@ -267,9 +200,5 @@ class HowdiesBot:
         self.send_json({"handler": "joinchatroom", "id": uuid.uuid4().hex, "name": room_name, "roomPassword": password})
     
     def disconnect(self):
-        self.log("Disconnecting...")
         self.running = False
-        with self.lock:
-            self.is_connecting = False
-        if self.ws: 
-            self.ws.close()
+        if self.ws: self.ws.close()
