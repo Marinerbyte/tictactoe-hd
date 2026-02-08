@@ -1,127 +1,198 @@
+import threading
 import time
 import random
-import threading
-import sys
-import os
-import requests
 import io
-from PIL import Image, ImageDraw, ImageFilter
-import utils
+import requests
+from PIL import Image, ImageDraw
 import db
+import utils
 
-# --- GLOBAL STATE ---
-penalty_games = {} 
-games_lock = threading.Lock()
-AVATAR_CACHE = {}
+# ==========================================
+# ⚙️ CONFIGURATION
+# ==========================================
+WIN_SCORE_REWARD = 50
+GAME_TIMEOUT = 60 # 60 Seconds to shoot
 
-def setup(bot_ref):
-    print("[PenaltyStrike] Updated to Points & Chips System.")
+# Global Registry
+GAMES = {} 
+GAMES_LOCK = threading.Lock()
 
-def get_robust_avatar(avatar_url, username):
-    if avatar_url in AVATAR_CACHE: return AVATAR_CACHE[avatar_url].copy()
+def setup(bot):
+    print("[Penalty] Premium Sports Engine Loaded.")
+
+# ==========================================
+# 🖼️ AVATAR & GRAPHICS SYSTEM
+# ==========================================
+
+def get_avatar(user_id, name):
+    """Robust Avatar Fetcher (Same as TTT)"""
     try:
-        if avatar_url:
-            r = requests.get(avatar_url, timeout=5)
-            if r.status_code == 200:
-                img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-                AVATAR_CACHE[avatar_url] = img
-                return img.copy()
-    except: pass
-    return Image.new("RGBA", (100, 100), (30, 30, 35))
+        url = f"https://api.howdies.app/api/avatar/{user_id}"
+        resp = requests.get(url, timeout=4)
+        if resp.status_code == 200:
+            return Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        raise Exception
+    except:
+        img = Image.new('RGBA', (260, 260), (30, 30, 60))
+        d = ImageDraw.Draw(img)
+        utils.write_text(d, (130, 130), name[0].upper(), size=120, col="white", align="center")
+        return img
 
-def draw_penalty_board(username, user_av, result="VS", user_pos=None, bot_pos=None, win_amt=0, pts_amt=0):
+def draw_penalty_board(username, result="VS", user_choice=None, bot_choice=None, win_amt=0, user_id=None):
     W, H = 700, 700
-    img = utils.get_gradient(W, H, (10, 40, 10), (20, 80, 20))
+    # Stadium Grass Gradient
+    base = utils.get_gradient(W, H, (10, 50, 20), (20, 90, 40))
+    img = Image.new('RGBA', (W, H))
+    img.paste(base, (0, 0))
     d = ImageDraw.Draw(img)
-    
-    border_col = "#FFD700" if result == "GOAL" else "#FFFFFF"
-    if result == "SAVED": border_col = "#FF4444"
-    d.rounded_rectangle([10, 10, W-10, H-10], radius=50, outline=border_col, width=6)
 
-    # Goal Area
-    gx1, gy1, gx2, gy2 = 120, 160, 580, 460
-    d.rectangle([gx1, gy1, gx2, gy2], outline="white", width=6)
+    # Goal Post (White Border)
+    d.rounded_rectangle([50, 50, 650, 450], radius=10, outline="white", width=8)
+    # Net pattern
+    for i in range(60, 640, 30):
+        d.line([(i, 50), (i, 450)], fill=(255, 255, 255, 50), width=1)
+    for i in range(60, 440, 30):
+        d.line([(50, i), (650, i)], fill=(255, 255, 255, 50), width=1)
 
-    # Goalkeeper (Bot)
-    b_xy = {1: (150, 240), 2: (265, 240), 3: (380, 240)}.get(bot_pos, (265, 240))
-    d.ellipse([b_xy[0], b_xy[1], b_xy[0]+170, b_xy[1]+170], fill="#333", outline=border_col, width=3)
+    # Goalkeeper (Bot) Position
+    bot_x = 350 # Center default
+    if bot_choice == 1: bot_x = 180 # Left
+    if bot_choice == 3: bot_x = 520 # Right
     
+    # Draw Goalkeeper (Red Jersey)
+    d.ellipse([bot_x-40, 250, bot_x+40, 330], fill="#FF4444", outline="white", width=2)
+    d.rectangle([bot_x-20, 330, bot_x+20, 400], fill="#FF4444")
+
+    # Football (User Shot)
+    if user_choice:
+        ball_x = 350
+        if user_choice == 1: ball_x = 180
+        if user_choice == 3: ball_x = 520
+        # Ball
+        d.ellipse([ball_x-25, 380, ball_x+25, 430], fill="white", outline="black", width=2)
+
+    # User Avatar Bubble (Bottom Center)
+    if user_id:
+        av = get_avatar(user_id, username).resize((120, 120))
+        mask = Image.new('L', (120, 120), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, 120, 120), fill=255)
+        img.paste(av, (290, 550), mask)
+
     # Result Overlay
-    if result != "VS":
-        res_col = "#00FF00" if result == "GOAL" else "#FF4444"
-        utils.write_text(d, (W//2, H//2), result, size=120, align="center", col=res_col, shadow=True)
-        if result == "GOAL":
-            utils.write_text(d, (W//2, H//2 + 100), f"+{win_amt} Chips | +{pts_amt} Points", size=30, align="center", col="white")
+    if result == "GOAL":
+        utils.write_text(d, (W//2, 200), "GOAL!", size=100, align="center", col="#00FF00", shadow=True)
+        utils.write_text(d, (W//2, 500), f"WON {win_amt} CHIPS", size=40, align="center", col="#FFD700", shadow=True)
+    elif result == "SAVED":
+        utils.write_text(d, (W//2, 200), "SAVED!", size=100, align="center", col="#FF0000", shadow=True)
     else:
-        utils.write_text(d, (W//2, 80), f"PLAYER: {username.upper()}", size=30, align="center", col="white")
+        # Initial Instructions
+        utils.write_text(d, (W//2, 500), f"PLAYER: @{username.upper()}", size=35, align="center", col="white")
+        utils.write_text(d, (W//2, 630), "AIM: 1 (Left) | 2 (Center) | 3 (Right)", size=25, align="center", col="#AAAAAA")
 
     return img
 
-def handle_command(bot, command, room_id, user, args, data):
-    cmd = command.lower().strip()
-    uid = str(data.get('userid', user))
-    av_id = data.get("avatar")
-    av_url = f"https://cdn.howdies.app/avatar?image={av_id}" if av_id else None
+# ==========================================
+# 📦 GAME LOGIC
+# ==========================================
 
-    with games_lock:
-        game = penalty_games.get(room_id)
+class PenaltyGame:
+    def __init__(self, uid, name, bet):
+        self.uid = uid
+        self.name = name
+        self.bet = bet
+        self.start_time = time.time()
 
-    # 1. Start Game (!pk <bet>)
-    if cmd == "pk":
-        if game: return True
-        try:
-            bet = int(args[0]) if args and args[0].isdigit() else 50
-            
-            # --- ECONOMY CHECK & DEDUCTION ---
-            # Hum pehle hi chips kaat rahe hain
-            if db.check_and_deduct_chips(uid, user, bet):
-                with games_lock:
-                    penalty_games[room_id] = {"uid": uid, "name": user, "av": av_url, "bet": bet, "time": time.time()}
-                
-                img = draw_penalty_board(user, av_url)
-                bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":"MATCH START"})
-                bot.send_message(room_id, f"⚽ @{user}, Shot direction? (1, 2, 3)\nBet: {bet} Chips")
-            else:
-                bot.send_message(room_id, f"❌ @{user}, Chips nahi hain! (Need {bet})")
-        except Exception as e:
-            print(f"Error pk: {e}")
+def cleanup(room_id):
+    with GAMES_LOCK:
+        if room_id in GAMES: del GAMES[room_id]
+
+def handle_command(bot, cmd, room_id, user, args, data):
+    uid = str(data.get('userid'))
+    
+    # 1. BOSS STOP (!endpk)
+    if cmd == "endpk" and bot.is_boss(user, uid):
+        if room_id in GAMES:
+            cleanup(room_id)
+            bot.send_message(room_id, "🛑 Boss stopped the match.")
         return True
 
-    # 2. Shooting Logic (1, 2, 3)
-    if cmd in ["1", "2", "3"] and game:
-        if uid != game["uid"]: return False
+    # 2. START GAME (!pk <bet>)
+    if cmd == "pk":
+        if room_id in GAMES:
+            bot.send_message(room_id, "⚠️ Match in progress."); return True
         
-        user_choice = int(cmd)
-        bot_choice = random.randint(1, 3)
-        is_goal = (user_choice != bot_choice)
-        result = "GOAL" if is_goal else "SAVED"
-        
-        # --- REWARD CALCULATION (BOT RULES) ---
-        win_chips = 0
-        win_points = 0
-        
-        if is_goal:
-            win_points = 50 # Fixed Points
-            # Chips limited to 100 as per your rule
-            win_chips = min(game["bet"] * 2, 100) 
+        try:
+            bet = int(args[0]) if args else 100
+            if bet <= 0: return True
             
-            # --- UPDATE DATABASE ---
-            # Chips_won is the amount we ADD back to user
-            db.add_game_result(uid, game["name"], "penalty", win_chips, True, win_points)
-        else:
-            # Loser: No points, no chips back (already deducted)
-            db.add_game_result(uid, game["name"], "penalty", 0, False, 0)
+            # ECONOMY: Check & Deduct
+            if not db.check_and_deduct_chips(uid, user, bet):
+                bot.send_message(room_id, f"❌ You need {bet} chips to play!")
+                return True
+                
+            with GAMES_LOCK:
+                GAMES[room_id] = PenaltyGame(uid, user, bet)
+            
+            img = draw_penalty_board(user, "VS", user_id=uid)
+            url = bot.upload_to_server(img)
+            bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": f"⚽ Penalty Shootout! Bet: {bet}"})
+            return True
+            
+        except: return False
 
-        # Render and Send
-        img = draw_penalty_board(game["name"], game["av"], result, user_choice, bot_choice, win_chips, win_points)
-        bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":utils.upload(bot, img),"text":result})
+    # 3. SHOOT (1, 2, 3)
+    if cmd in ["1", "2", "3"]:
+        g = GAMES.get(room_id)
+        if not g: return False
+        
+        # Concurrency: Check User
+        if g.uid != uid: return False
+        
+        # Timeout Check
+        if time.time() - g.start_time > GAME_TIMEOUT:
+            cleanup(room_id)
+            bot.send_message(room_id, "⏰ Time Up! Goalkeeper left.")
+            return True
+
+        # LOGIC
+        user_shot = int(cmd)
+        bot_save = random.randint(1, 3)
+        
+        # Win Condition: User shot != Bot save position
+        is_goal = (user_shot != bot_save)
         
         if is_goal:
-            bot.send_message(room_id, f"🥅 **GOAL!** @{game['name']} jeet gaya!\nReceived: {win_chips} Chips & {win_points} Points.")
+            win_chips = g.bet * 2
+            win_score = WIN_SCORE_REWARD
+            result_text = "GOAL"
+            
+            # DB UPDATE: Net profit (Total - Bet)
+            # Kyunki bet pehle hi kat chuki hai, hum Total Winnings add nahi karenge
+            # Hum seedha wallet update karenge
+            
+            # Wait! DB Logic:
+            # check_and_deduct ne bet kaat li.
+            # Agar jeeta, toh usse (Bet * 2) wapas milna chahiye.
+            # db.add_game_result balance update kar dega.
+            
+            db.add_game_result(uid, user, "penalty", win_chips, is_win=True, points_reward=win_score)
+            
+            msg = f"⚽ **GOAL!** You won {win_chips} chips!"
         else:
-            bot.send_message(room_id, f"🧤 **SAVED!** @{game['name']} haar gaya. Chips gaye!")
+            win_chips = 0
+            win_score = 0
+            result_text = "SAVED"
+            # Loss record
+            db.add_game_result(uid, user, "penalty", 0, is_win=False)
+            msg = f"🧤 **SAVED!** Goalkeeper caught it. You lost {g.bet} chips."
 
-        with games_lock: penalty_games.pop(room_id, None)
+        # Graphics
+        img = draw_penalty_board(user, result_text, user_shot, bot_save, win_chips, uid)
+        url = bot.upload_to_server(img)
+        
+        bot.send_json({"handler": "chatroommessage", "roomid": room_id, "type": "image", "url": url, "text": msg})
+        
+        cleanup(room_id)
         return True
 
     return False
