@@ -12,7 +12,7 @@ SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 def setup(bot):
-    print("[Economy] SYSTEM RELOADED.")
+    print("[Economy] SYSTEM ACTIVE.")
 
 # --- HELPERS ---
 
@@ -56,7 +56,7 @@ def get_target_info(bot, room_id, name):
     except: return None, None
     finally: conn.close()
 
-# --- MISSING FUNCTION ADDED ---
+# --- FUNCTION JO MISSING THA (Ab Added Hai) ---
 def get_detailed_stats(user_id):
     conn = db.get_connection()
     try:
@@ -87,7 +87,7 @@ def handle_command(bot, cmd, room_id, user, args, data):
                     try:
                         val = int(args[1])
                         is_score = (cmd == "sets")
-                        # Get current to calculate diff
+                        # Get current
                         curr = db.get_user_data(tid, tname)['points' if is_score else 'chips']
                         change = val - curr
                         
@@ -98,6 +98,20 @@ def handle_command(bot, cmd, room_id, user, args, data):
                         bot.send_message(room_id, f"[OK] Admin set {tname}'s {'score' if is_score else 'chips'} to {format_k(val)}")
                     except ValueError: pass
                 else: bot.send_message(room_id, f"[!] User '{args[0]}' not found.")
+                return True
+
+            if cmd in ["resetc", "resets"] and args:
+                tid, tname = get_target_info(bot, room_id, args[0])
+                if tid:
+                    if cmd == "resetc":
+                        db.update_balance(tid, tname, chips_change=-db.get_user_data(tid, tname)['chips'])
+                        bot.send_message(room_id, f"[OK] {tname}'s chips reset.")
+                    else: # resets
+                        conn = db.get_connection(); cur = conn.cursor()
+                        cur.execute(f"UPDATE users SET points=0, wins=0 WHERE user_id={db.get_ph()}", (tid,))
+                        cur.execute(f"DELETE FROM game_stats WHERE user_id={db.get_ph()}", (tid,))
+                        conn.close()
+                        bot.send_message(room_id, f"[OK] {tname}'s stats wiped.")
                 return True
 
             if cmd == "wipedb" and args and args[0] == "confirm":
@@ -118,7 +132,8 @@ def handle_command(bot, cmd, room_id, user, args, data):
             if not tid: bot.send_message(room_id, "[!] User not found."); return True
             
             u = db.get_user_data(tid, rname)
-            rows = get_detailed_stats(tid) # Now this works
+            # YE FUNCTION AB DEFINED HAI, CHALEGA
+            rows = get_detailed_stats(tid) 
             
             msg = f"--- PROFILE: {rname.upper()} ---\n[*] Score: {format_k(u['points'])}\n($) Chips: {format_k(u['chips'])}\n"
             if rows:
@@ -151,17 +166,14 @@ def handle_command(bot, cmd, room_id, user, args, data):
                 if not sess or now > sess['expires']: return False
                 sess['page']+=1; sess['expires']=now + SESSION_TIMEOUT
                 page, b_type = sess['page'], sess['type']
-            
             col = "points" if b_type == "gls" else "chips"
             offset = page * PAGE_SIZE
             conn = db.get_connection(); cur = conn.cursor()
             cur.execute(f"SELECT username, {col} FROM users ORDER BY {col} DESC LIMIT {PAGE_SIZE} OFFSET {offset}")
             rows = cur.fetchall(); conn.close()
-            
             if not rows: bot.send_message(room_id, "End of list."); return True
             msg = f"--- PAGE {page+1} ---\n"
-            for i, (u, v) in enumerate(rows, 1):
-                msg += f"- {offset+i}. {u[:10]} : {format_k(v)}\n"
+            for i, (u, v) in enumerate(rows, 1): msg += f"- {offset+i}. {u[:10]} : {format_k(v)}\n"
             bot.send_message(room_id, msg); return True
 
     except: traceback.print_exc()
