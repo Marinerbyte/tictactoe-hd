@@ -3,36 +3,29 @@ import time
 import random
 import io
 import requests
-import math
 from PIL import Image, ImageDraw, ImageOps, ImageFilter
 import db
 import utils
 
 # ==========================================
-# ⚙️ CONFIGURATION
+# ⚙️ CONFIGURATION & GIF LINKS
 # ==========================================
 WIN_SCORE = 30
-HEADS_URL = "https://www.dropbox.com/scl/fi/jxin556171p1jxc9ijjt8/file_00000000e1647209a0f1041e0faf6aa7.png?rlkey=qaho82a5zc2edarlyrn0pk0nd&st=syo1hqsh&dl=1"
-TAILS_URL = "https://www.dropbox.com/scl/fi/0icyzmbn04dw1r2wburaw/file_00000000a67472099de1c5aa86bf3f9d.png?rlkey=9cy19hi5h704cy36onshi9wgr&st=8jts2yc9&dl=1"
+# Pre-made 3D GIFs provided by you
+GIF_HEADS = "https://www.dropbox.com/scl/fi/4whxj4eouati7b9lj3vuj/coin_heads_3d.gif?rlkey=2ojhelepejxx4h3gln6ykmde8&st=ug1sr2vx&dl=1"
+GIF_TAILS = "https://www.dropbox.com/scl/fi/oc0hg4h5h51h95fz5quy5/coin_tails_3d.gif?rlkey=m4i6zx2e0lfjqr9rktymfk345&st=9yl8qy8l&dl=1"
 
-COIN_CACHE = {}
+# Static PNGs for the final result card
+PNG_HEADS = "https://www.dropbox.com/scl/fi/jxin556171p1jxc9ijjt8/file_00000000e1647209a0f1041e0faf6aa7.png?rlkey=qaho82a5zc2edarlyrn0pk0nd&st=syo1hqsh&dl=1"
+PNG_TAILS = "https://www.dropbox.com/scl/fi/0icyzmbn04dw1r2wburaw/file_00000000a67472099de1c5aa86bf3f9d.png?rlkey=9cy19hi5h704cy36onshi9wgr&st=8jts2yc9&dl=1"
+
 AV_CACHE = {}
+COIN_PNG_CACHE = {}
 
 def setup(bot):
-    print("[CoinFlip-HD] Lightweight High-Speed Engine Loaded.")
+    print("[CoinFlip-HD] Pre-made 3D GIF Engine Loaded.")
 
 # --- HELPERS ---
-
-def get_coin_img(side):
-    if side in COIN_CACHE: return COIN_CACHE[side]
-    url = HEADS_URL if side == "heads" else TAILS_URL
-    try:
-        r = requests.get(url, timeout=5)
-        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-        COIN_CACHE[side] = img
-        return img
-    except:
-        return Image.new('RGBA', (200, 200), (50, 50, 50))
 
 def get_avatar_robust(user_id, username, avatar_url=None):
     if user_id in AV_CACHE: return AV_CACHE[user_id].copy()
@@ -47,6 +40,17 @@ def get_avatar_robust(user_id, username, avatar_url=None):
     AV_CACHE[user_id] = img
     return img.copy()
 
+def get_static_coin(side):
+    if side in COIN_PNG_CACHE: return COIN_PNG_CACHE[side].copy()
+    url = PNG_HEADS if side == "heads" else PNG_TAILS
+    try:
+        r = requests.get(url, timeout=5)
+        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
+        COIN_PNG_CACHE[side] = img
+        return img.copy()
+    except:
+        return Image.new('RGBA', (200, 200), (50, 50, 50))
+
 def apply_round_corners(img, radius):
     mask = Image.new("L", img.size, 0)
     draw = ImageDraw.Draw(mask)
@@ -56,98 +60,53 @@ def apply_round_corners(img, radius):
     return out
 
 # ==========================================
-# 🌀 LIGHTWEIGHT GIF ENGINE (Jump & Pause)
-# ==========================================
-
-def create_flip_gif(final_side):
-    W, H = 400, 400 # Optimized resolution
-    frames = []
-    h_img = get_coin_img("heads").resize((180, 180), Image.Resampling.LANCZOS)
-    t_img = get_coin_img("tails").resize((180, 180), Image.Resampling.LANCZOS)
-    
-    anim_frames = 12 # Optimized frame count
-    pause_frames = 6 
-    
-    for i in range(anim_frames + pause_frames):
-        # Optimized gradient background
-        frame = utils.get_gradient(W, H, (10, 40, 10), (20, 80, 20))
-        d = ImageDraw.Draw(frame)
-        d.rounded_rectangle([5, 5, W-5, H-5], radius=35, outline="white", width=3)
-        
-        if i < anim_frames:
-            # Physics Jump (Parabola)
-            jump = -100 * math.sin((i / anim_frames) * math.pi)
-            angle = (i / anim_frames) * math.pi * 5 # Fast 2.5 rotations
-            width_factor = abs(math.cos(angle))
-            current_face = h_img if math.cos(angle) > 0 else t_img
-        else:
-            # Result Pause
-            jump = 0
-            width_factor = 1.0
-            current_face = h_img if final_side == "heads" else t_img
-
-        new_w = max(1, int(180 * width_factor))
-        resized_coin = current_face.resize((new_w, 180), Image.Resampling.LANCZOS)
-        
-        # Ground Shadow
-        sw = int(100 * (1 + (jump/200)))
-        d.ellipse([W//2 - sw//2, H-80, W//2 + sw//2, H-60], fill=(0,0,0,80))
-        
-        frame.paste(resized_coin, (W//2 - new_w//2, int(H//2 - 90 + jump)), resized_coin)
-        frames.append(frame)
-        
-    out = io.BytesIO()
-    # Speed set to 70ms for natural look
-    frames[0].save(out, format='GIF', save_all=True, append_images=frames[1:], duration=70, loop=0, optimize=True)
-    return out.getvalue()
-
-# ==========================================
-# 🏆 LIGHTWEIGHT RESULT CARD
+# 🏆 PREMIUM RESULT CARD
 # ==========================================
 
 def draw_result_card(username, user_id, av_url, result_side, is_win, bet, win_total):
-    W, H = 550, 550 # Light-weight resolution
-    base = utils.get_gradient(W, H, (10, 40, 10), (20, 80, 20)) 
+    W, H = 600, 600
+    # Turf Green Gradient (Penalty Style)
+    base = utils.get_gradient(W, H, (10, 45, 15), (25, 95, 30))
     img = Image.new('RGBA', (W, H))
     img.paste(base, (0,0))
     d = ImageDraw.Draw(img)
 
     border_col = "#00FF00" if is_win else "#FF0000"
-    d.rounded_rectangle([8, 8, W-8, H-8], radius=45, outline=border_col, width=5)
+    d.rounded_rectangle([10, 10, W-10, H-10], radius=50, outline=border_col, width=6)
 
     # Header
-    utils.write_text(d, (W//2, 45), "COIN FLIP", size=35, align="center", col="white", shadow=True)
+    utils.write_text(d, (W//2, 50), "FLIP RESULT", size=40, align="center", col="white", shadow=True)
 
-    # Result Coin
-    coin_res = get_coin_img(result_side).resize((220, 220), Image.Resampling.LANCZOS)
+    # Result Coin Image
+    coin_img = get_static_coin(result_side).resize((250, 250), Image.Resampling.LANCZOS)
     # Result Glow
-    gc = (0, 255, 127, 60) if is_win else (255, 49, 49, 60)
-    d.ellipse([W//2-130, 110, W//2+130, 370], fill=gc)
-    img.paste(coin_res, (W//2 - 110, 130), coin_res)
+    gc = (0, 255, 127, 80) if is_win else (255, 49, 49, 80)
+    d.ellipse([W//2-130, 120, W//2+130, 380], fill=gc)
+    img.paste(coin_img, (W//2 - 125, 130), coin_img)
 
-    # Winner/Loser Text
+    # Winner/Loser Title
     res_txt = "VICTORY" if is_win else "DEFEAT"
-    utils.write_text(d, (W//2, 400), res_txt, size=65, align="center", col=border_col, shadow=True)
+    utils.write_text(d, (W//2, 420), res_txt, size=75, align="center", col=border_col, shadow=True)
 
-    # Striker Info (Bottom Left)
-    av = get_avatar_robust(user_id, username, av_url).resize((100, 100))
-    av_mask = Image.new('L', (100, 100), 0)
-    ImageDraw.Draw(av_mask).ellipse((0, 0, 100, 100), fill=255)
-    img.paste(av, (30, 420), av_mask)
-    d.ellipse([30, 420, 130, 520], outline="white", width=3)
-    utils.write_text(d, (80, 530), username.upper()[:10], size=18, align="center", col="white")
+    # Player Info (Bottom Left)
+    av = get_avatar_robust(user_id, username, av_url).resize((110, 110))
+    av_mask = Image.new('L', (110, 110), 0)
+    ImageDraw.Draw(av_mask).ellipse((0, 0, 110, 110), fill=255)
+    img.paste(av, (35, 455), av_mask)
+    d.ellipse([35, 455, 145, 565], outline="white", width=3)
+    utils.write_text(d, (90, 575), username.upper()[:10], size=20, align="center", col="white")
 
-    # Winnings (RED TEXT)
+    # Winnings (RED TEXT AS REQUESTED)
     chips_txt = f"+{win_total} Chips" if is_win else f"-{bet} Chips"
-    utils.write_text(d, (W-30, 450), chips_txt, size=38, align="right", col="#FF0000") # RED
+    utils.write_text(d, (W-40, 480), chips_txt, size=40, align="right", col="#FF0000") # RED
     
     if is_win:
-        utils.write_text(d, (W-30, 500), f"+{WIN_SCORE} Score", size=24, align="right", col="#00F2FE")
+        utils.write_text(d, (W-40, 535), f"+{WIN_SCORE} Score", size=25, align="right", col="#00F2FE")
 
-    return apply_round_corners(img, 40)
+    return apply_round_corners(img, 45)
 
 # ==========================================
-# 📡 HANDLER
+# 📡 COMMAND HANDLER
 # ==========================================
 
 def handle_command(bot, cmd, room_id, user, args, data):
@@ -156,46 +115,60 @@ def handle_command(bot, cmd, room_id, user, args, data):
 
     if cmd == "flip":
         if len(args) < 2:
-            bot.send_message(room_id, "Usage: !flip <h/t> <amt>"); return True
+            bot.send_message(room_id, "Usage: !flip <h/t> <amount>"); return True
 
-        # Input Check
-        side_in = args[0].lower()
-        if side_in in ['h', 'heads']: choice = "heads"
-        elif side_in in ['t', 'tails']: choice = "tails"
+        # Side Selection
+        input_side = args[0].lower()
+        if input_side in ['h', 'heads', 'head']: choice = "heads"
+        elif input_side in ['t', 'tails', 'tail']: choice = "tails"
         else: return True
 
         try:
             bet = int(args[1])
-            if bet < 100: bot.send_message(room_id, "Minimum bet 100."); return True
+            if bet < 100: bot.send_message(room_id, "❌ Minimum bet 100 chips."); return True
             
-            # ECONOMY
+            # ECONOMY SYNC
             if not db.check_and_deduct_chips(uid, user, bet):
-                bot.send_message(room_id, f"❌ @{user}, Need {bet} chips!"); return True
+                bot.send_message(room_id, f"❌ @{user}, Not enough chips!"); return True
 
+            # Decide Result
             result_side = random.choice(['heads', 'tails'])
             is_win = (choice == result_side)
             win_total = bet * 2 if is_win else 0
 
-            # 1. GENERATE & SEND GIF (Optimized Size)
-            gif_data = create_flip_gif(result_side)
-            gif_url = bot.upload_to_server(gif_data, file_type='gif')
-            bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":gif_url,"text":"Flipping..."})
+            # 1. SEND PRE-MADE 3D GIF (Super Fast)
+            target_gif = GIF_HEADS if result_side == "heads" else GIF_TAILS
+            bot.send_json({
+                "handler": "chatroommessage",
+                "roomid": room_id,
+                "type": "image",
+                "url": target_gif,
+                "text": f"@{user} uchal raha hai sika..."
+            })
 
-            # 2. DELAYED CARD (Async to prevent blocking)
-            def delayed_card():
-                time.sleep(1.8) # Adjusted for faster GIF duration
-                # DB Sync
+            # 2. DELAYED RESULT CARD
+            def show_result():
+                # GIF plays for ~2 seconds
+                time.sleep(2.2) 
+                
+                # Update DB
                 if is_win:
                     db.add_game_result(uid, user, "coinflip", win_total - bet, True, WIN_SCORE)
                 else:
                     db.add_game_result(uid, user, "coinflip", -bet, False, 0)
                 
-                # Card Render
+                # Render Card
                 card = draw_result_card(user, uid, av_url, result_side, is_win, bet, win_total)
                 card_url = bot.upload_to_server(card)
-                bot.send_json({"handler":"chatroommessage","roomid":room_id,"type":"image","url":card_url,"text":f"{result_side.upper()}!"})
+                bot.send_json({
+                    "handler": "chatroommessage",
+                    "roomid": room_id,
+                    "type": "image",
+                    "url": card_url,
+                    "text": f"It's {result_side.upper()}!"
+                })
 
-            threading.Thread(target=delayed_card).start()
+            threading.Thread(target=show_result).start()
             return True
 
         except: return True
